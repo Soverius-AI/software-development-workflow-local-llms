@@ -1,16 +1,26 @@
-# Durable GitHub → Mastra loop
+# Local-LLM software-development graph
 
-This is the small control plane we discussed for the webinar. GitHub events are
-recorded in SQLite first and acknowledged quickly. A coordinator then gives
-Mastra at most one implementation slot by default. Consequently, an event that
-arrives while Mastra is working is never used to interrupt the current model
-turn.
+The intended system is a complete development graph: issue readiness and
+decomposition, Codex goal-based implementation, deterministic checks, parallel
+specialist reviewers, manager consolidation and human escalation, recording,
+and a separate scheduled self-improvement graph. The durable GitHub → Mastra
+loop below is the first implemented slice, not the complete workflow.
 
-For an event concerning the same issue, the coordinator attaches it to the
-existing run's inbox. For a different issue it creates another run, which waits
-for the local implementation slot. GitHub delivery IDs make retries harmless,
-and messages produced by the configured bot are ignored to prevent feedback
-loops.
+Future agent sessions should begin with `AGENTS.md`. The full design, reviewer
+contract, conflict handling, visual-design evidence, recorder, and learning
+boundary are documented in `docs/architecture.md`. Machine-readable node status
+and the required reviewer set live in `src/graph-definition.ts`.
+
+## Implemented control-plane slice
+
+GitHub events are recorded in SQLite first and acknowledged quickly. A
+coordinator gives Mastra at most one implementation slot by default. An event
+that arrives while Mastra is working never interrupts the current model turn.
+
+For the same issue, the coordinator attaches the event to the existing run's
+inbox. For a different issue it creates another run, which waits for the local
+implementation slot. GitHub delivery IDs make retries harmless, and messages
+produced by the configured bot are ignored to prevent feedback loops.
 
 ```mermaid
 flowchart LR
@@ -38,32 +48,29 @@ pnpm start
 
 The service listens only on `127.0.0.1:4317`. `GET /health` shows whether an
 implementation occupies the slot, and `GET /runs` shows the durable run state.
-The event database and Mastra's workflow snapshots live separately under
-`.data/`.
+The event database and Mastra workflow snapshots live separately under `.data/`.
 
 The included [GitHub Actions workflow](.github/workflows/local-loop.yml) uses a
 self-hosted runner labelled `local-llm`. That runner opens an outbound
 connection to GitHub, receives the job, and posts the event to the loop service
-on the same machine. Therefore the local machine does not need a public inbound
-port. For a direct GitHub webhook instead, expose the receiver through a secure
-tunnel and set `GITHUB_WEBHOOK_SECRET`; the receiver validates
-`x-hub-signature-256` against the raw body.
+on the same machine. The local machine therefore needs no public inbound port.
+For a direct GitHub webhook, expose the receiver through a secure tunnel and set
+`GITHUB_WEBHOOK_SECRET`; the receiver validates `x-hub-signature-256`.
 
 ## Human decisions
 
-Add the label `needs-human` to an issue to demonstrate suspension. Mastra stores
-the suspended workflow snapshot and the control database marks the run as
-`waiting_human`. A subsequent human issue comment is correlated with that issue
-and resumes the exact Mastra run. Other issues may proceed while this one waits.
+Add the label `needs-human` to demonstrate suspension. Mastra stores the
+suspended workflow snapshot and the control database marks the run as
+`waiting_human`. A subsequent human issue comment resumes the exact run. Other
+issues may proceed while this one waits.
 
-## Where Codex fits
+## Where Codex fits today
 
 The current implementation step deliberately waits for
-`SIMULATED_IMPLEMENTATION_MS`; this makes concurrency behavior deterministic in
-the demo and tests. Replace that delay inside `src/workflow.ts` with the Codex
-goal invocation. The durable inbox, one-writer rule, suspension, and event
-routing stay unchanged. Review agents can then be added after implementation as
-parallel Mastra branches, followed by the manager/consolidation node we designed.
+`SIMULATED_IMPLEMENTATION_MS`; this makes concurrency deterministic in the demo
+and tests. It still needs to be replaced by the real Codex goal worker. The
+readiness node, reviewers, manager, recorder, pull-request integration, and
+self-improvement graph are specified but explicitly marked as planned.
 
 ## Verify
 
