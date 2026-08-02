@@ -11,6 +11,85 @@ contract, conflict handling, visual-design evidence, recorder, and learning
 boundary are documented in `docs/architecture.md`. Machine-readable node status
 and the required reviewer set live in `src/graph-definition.ts`.
 
+## How we arrived at this architecture
+
+This project grew out of a discussion about three overlapping ways of thinking
+about AI-assisted development. Harness engineering gives a coding agent its
+working environment: repository context, tools, skills, constraints, and a goal.
+The agent can think, act, inspect the result, and correct itself within a turn.
+Codex goal mode adds a durable outcome and verification criteria across that
+work, but it is not the same as an independent reviewer.
+
+Loop engineering moves beyond a single human prompt and agent turn. We used the
+four-loop model in which the agent loop performs the work, the verification loop
+sends failed work back, the event-driven loop starts runs from GitHub events or
+schedules, and the hill-climbing loop improves the system from accumulated
+experience. These loops are nested rather than competing ideas:
+
+```mermaid
+flowchart LR
+  H["Hill-climbing loop"] --> E["Event-driven loop"]
+  E --> V["Verification loop"]
+  V --> A["Agent loop"]
+```
+
+Graph engineering does not claim that these mechanisms are new. It foregrounds
+an aspect that can become hard to see when everything is called a loop: the
+topology connecting agents, deterministic checks, parallel reviewers, joins,
+repair routes, persisted state, side effects, and human decisions. The concise
+distinction for the webinar is: loop engineering focuses on repeated execution
+and feedback; graph engineering focuses attention on the relationships through
+which that work moves.
+
+For this implementation, Codex is the write-capable software-development worker,
+while Mastra is the durable TypeScript orchestration layer around it. That
+separation lets the coding harness concentrate on implementation and lets the
+graph control triggers, correlation, retries, suspension, concurrency, and
+review routing. Mastra also fits the Angular meetup context better than making a
+Python-first orchestration framework the centre of the demonstration. OpenHands
+and Hermes were considered useful coding-agent or self-evolution references,
+but neither replaces the explicit orchestration graph needed here. Hermes's
+self-evolution work particularly influenced the separation between recording a
+run and later evaluating a proposed improvement.
+
+The development graph begins with a GitHub issue or pull-request event. Before
+implementation, a readiness node verifies that the issue has enough information
+and meaningful acceptance criteria. It may ask a human for missing context or
+propose multiple child issues when the work contains independently deliverable
+outcomes. The system must not invent product decisions merely to keep moving.
+
+One Codex worker then implements an accepted issue in an isolated worktree. Its
+inner self-correction answers whether its latest action worked; goal validation
+answers whether the overall requested outcome is complete. Deterministic checks
+then run repository-owned tests, builds, linting, type checks, and policies.
+Agent-written tests are useful implementation output, but they cannot alone be
+independent proof that the same agent understood the requirement correctly.
+Acceptance criteria, existing tests, externally defined checks, independent
+review, and human evaluation form that boundary.
+
+After those checks, read-only specialist reviewers independently examine
+security, architecture, framework-specific practices, performance, tests,
+accessibility, code quality, likely bugs, and visual design. Visual design is a
+real rendered-output review: it needs baseline and candidate screenshots and
+application design references, not merely source-code inspection.
+
+A manager node consolidates reviewer evidence rather than counting votes. It
+deduplicates findings, resolves compatible recommendations, and returns one
+bounded repair brief to implementation. If architecture and performance, for
+example, recommend genuinely incompatible choices and the acceptance criteria do
+not establish the priority, the manager suspends the run. A human then receives
+both arguments, their evidence and costs, and the precise decision required.
+
+Finally, a recorder captures enough evidence to reconstruct what happened:
+inputs, attempts, commands, changed files, deterministic results, reviewer and
+manager decisions, human feedback, outcomes, and exact graph, prompt, skill,
+rubric, and model versions. Learning is deliberately a separate scheduled
+process. It reads new experiences after `lastAnalysedRunId`, distils recurring
+lessons, proposes versioned candidates, and replays the same cases against a
+frozen baseline. Regression and safety gates plus human approval are required
+before a candidate can affect future runs. The production graph never rewrites
+itself while it is running.
+
 ## Implemented control-plane slice
 
 GitHub events are recorded in SQLite first and acknowledged quickly. A
