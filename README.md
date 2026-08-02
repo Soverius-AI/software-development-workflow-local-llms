@@ -129,12 +129,47 @@ The service listens only on `127.0.0.1:4317`. `GET /health` shows whether an
 implementation occupies the slot, and `GET /runs` shows the durable run state.
 The event database and Mastra workflow snapshots live separately under `.data/`.
 
-The included [GitHub Actions workflow](.github/workflows/ai-development.yml) uses a
-self-hosted runner labelled `local-llm`. That runner opens an outbound
+The included [GitHub Actions workflow](.github/workflows/implementer.yml) uses a
+self-hosted runner labelled `implementer`. That runner opens an outbound
 connection to GitHub, receives the job, and posts the event to the loop service
 on the same machine. The local machine therefore needs no public inbound port.
 For a direct GitHub webhook, expose the receiver through a secure tunnel and set
 `GITHUB_WEBHOOK_SECRET`; the receiver validates `x-hub-signature-256`.
+
+## Install the GitHub runner
+
+The runner setup belongs to this checkout, while the downloaded GitHub runner,
+its credentials, and job workspace remain under the ignored
+`.data/actions-runner/` directory. Authenticate GitHub CLI with an account that
+can administer Actions runners for this repository, then configure the runner:
+
+```sh
+gh auth login
+pnpm runner:setup
+pnpm runner:start
+```
+
+Select the repository in `.env` using its `owner/repository` name:
+
+```dotenv
+GITHUB_REPOSITORY=Soverius-AI/software-development-workflow-local-llms
+```
+
+`runner:start` keeps the runner in the foreground. On macOS or Linux it can
+instead be installed through the service helper supplied by GitHub's runner:
+
+```sh
+pnpm runner:service:install
+pnpm runner:service:start
+pnpm runner:service:status
+```
+
+If `GITHUB_REPOSITORY` is empty, setup derives the repository from `origin`. It
+names the runner after the machine and adds the `implementer` label required by
+the workflow. `RUNNER_NAME`, `RUNNER_LABELS`, and a one-time `RUNNER_TOKEN` can
+override those values. The repository setting is used when the runner is first
+registered; changing it later does not move an existing registration. Do not
+commit the downloaded runner or its registration credentials.
 
 ## Human decisions
 

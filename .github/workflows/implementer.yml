@@ -1,4 +1,4 @@
-name: AI development
+name: Implementer
 
 on:
   issues:
@@ -11,9 +11,8 @@ on:
 
 jobs:
   enqueue:
-    # Install a GitHub self-hosted runner on the machine that runs Mastra and
-    # give it the custom label "local-llm".
-    runs-on: [self-hosted, local-llm]
+    # The custom role label selects the machine that hosts the implementation graph.
+    runs-on: implementer
     timeout-minutes: 2
     steps:
       - name: Deliver event to the durable local inbox

@@ -6,6 +6,12 @@
   "scripts": {
     "dev": "node --watch --import tsx src/server.ts",
     "start": "node --import tsx src/server.ts",
+    "runner:setup": "./scripts/setup-github-runner.sh",
+    "runner:start": "./scripts/start-github-runner.sh",
+    "runner:service:install": "./scripts/github-runner-service.sh install",
+    "runner:service:start": "./scripts/github-runner-service.sh start",
+    "runner:service:stop": "./scripts/github-runner-service.sh stop",
+    "runner:service:status": "./scripts/github-runner-service.sh status",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts"
   },
