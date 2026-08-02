@@ -129,7 +129,7 @@ The service listens only on `127.0.0.1:4317`. `GET /health` shows whether an
 implementation occupies the slot, and `GET /runs` shows the durable run state.
 The event database and Mastra workflow snapshots live separately under `.data/`.
 
-The included [GitHub Actions workflow](.github/workflows/local-loop.yml) uses a
+The included [GitHub Actions workflow](.github/workflows/ai-development.yml) uses a
 self-hosted runner labelled `local-llm`. That runner opens an outbound
 connection to GitHub, receives the job, and posts the event to the loop service
 on the same machine. The local machine therefore needs no public inbound port.

@@ -1,4 +1,4 @@
-name: Send event to local Mastra loop
+name: AI development
 
 on:
   issues:
