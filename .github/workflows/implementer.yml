@@ -7,7 +7,6 @@ on:
     types: [created]
   pull_request:
     types: [opened, synchronize, reopened]
-  push:
 
 jobs:
   enqueue:
@@ -19,11 +18,10 @@ jobs:
         env:
           DELIVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           EVENT_NAME: ${{ github.event_name }}
-          EVENT_PATH: ${{ github.event_path }}
         run: |
           curl --fail-with-body --retry 3 \
             -X POST http://127.0.0.1:4317/webhooks/github \
             -H "content-type: application/json" \
             -H "x-github-delivery: ${DELIVERY_ID}" \
             -H "x-github-event: ${EVENT_NAME}" \
-            --data-binary "@${EVENT_PATH}"
+            --data-binary "@${GITHUB_EVENT_PATH}"

@@ -1,13 +1,13 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import { normalizeGitHubEvent, verifyGitHubSignature } from "./github.js";
-import type { AppConfig } from "./config.js";
-import { RunCoordinator } from "./coordinator.js";
-import { EventStore } from "./store.js";
-import { createImplementationMastra } from "./workflow.js";
+import { normalizeGitHubEvent, verifyGitHubSignature } from "./github";
+import type { AppConfig } from "./config";
+import { RunCoordinator } from "./coordinator";
+import { EventStore } from "./store";
+import { createImplementationMastra } from "./workflow";
 
 export async function createApp(config: AppConfig) {
   const eventStore = new EventStore(config.databasePath);
-  const { workflow, storage } = createImplementationMastra({
+  const { mastra, workflow, storage } = createImplementationMastra({
     databaseUrl: config.mastraDatabaseUrl,
     eventStore,
   });
@@ -41,7 +41,9 @@ export async function createApp(config: AppConfig) {
           server.close((error) => (error ? reject(error) : resolve())),
         );
       }
-      await storage.close();
+      await coordinator.close();
+      await mastra.observability.flush();
+      await mastra.shutdown();
       eventStore.close();
     },
   };
@@ -93,11 +95,7 @@ async function route(
 
   const event = normalizeGitHubEvent({ deliveryId, eventName, payload });
   const result = store.ingest(event, config.githubBotLogin);
-  if (
-    result.outcome === "created" ||
-    result.outcome === "attached" ||
-    result.outcome === "resume_requested"
-  ) {
+  if (["created", "attached", "resume_requested"].includes(result.outcome)) {
     coordinator.wake();
   }
   sendJson(response, 202, result);

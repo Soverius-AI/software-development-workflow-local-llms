@@ -7,7 +7,7 @@ import type {
   NormalizedGitHubEvent,
   RunStatus,
   WorkflowRunRecord,
-} from "./types.js";
+} from "./types";
 
 const ACTIVE_STATUSES = "'queued','running','waiting_human'";
 

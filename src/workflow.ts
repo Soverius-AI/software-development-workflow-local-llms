@@ -1,8 +1,10 @@
 import { Mastra } from "@mastra/core/mastra";
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { LibSQLStore } from "@mastra/libsql";
+import { PinoLogger } from "@mastra/loggers";
+import { MastraStorageExporter, Observability } from "@mastra/observability";
 import { z } from "zod";
-import type { EventStore } from "./store.js";
+import type { EventStore } from "./store";
 
 const workflowDataSchema = z.object({
   controlRunId: z.string(),
@@ -57,7 +59,16 @@ export function createImplementationMastra(params: {
   const mastra = new Mastra({
     storage,
     workflows: { implementation: workflow },
-    logger: false,
+    logger: new PinoLogger({ name: "Implementer", level: "info" }),
+    observability: new Observability({
+      configs: {
+        default: {
+          serviceName: "implementer",
+          exporters: [new MastraStorageExporter()],
+          logging: { enabled: true, level: "info" },
+        },
+      },
+    }),
   });
 
   return { mastra, workflow, storage };

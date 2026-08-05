@@ -1,10 +1,12 @@
 import type { Workflow } from "@mastra/core/workflows";
-import type { EventStore } from "./store.js";
-import type { WorkflowRunRecord } from "./types.js";
+import type { EventStore } from "./store";
+import type { WorkflowRunRecord } from "./types";
 
 export class RunCoordinator {
   private active = 0;
-  private wakeScheduled = false;
+  private wakeHandle: NodeJS.Immediate | undefined;
+  private closing = false;
+  private idleResolvers: Array<() => void> = [];
 
   constructor(
     private readonly store: EventStore,
@@ -14,12 +16,21 @@ export class RunCoordinator {
   ) {}
 
   wake(): void {
-    if (this.wakeScheduled) return;
-    this.wakeScheduled = true;
-    setImmediate(() => {
-      this.wakeScheduled = false;
+    if (this.closing || this.wakeHandle) return;
+    this.wakeHandle = setImmediate(() => {
+      this.wakeHandle = undefined;
       this.pump();
     });
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+    if (this.wakeHandle) {
+      clearImmediate(this.wakeHandle);
+      this.wakeHandle = undefined;
+    }
+    if (this.active === 0) return;
+    await new Promise<void>((resolve) => this.idleResolvers.push(resolve));
   }
 
   get activeCount(): number {
@@ -34,7 +45,11 @@ export class RunCoordinator {
       this.active += 1;
       void this.execute(record).finally(() => {
         this.active -= 1;
-        this.wake();
+        if (this.active === 0 && this.closing) {
+          for (const resolve of this.idleResolvers.splice(0)) resolve();
+        } else {
+          this.wake();
+        }
       });
     }
   }

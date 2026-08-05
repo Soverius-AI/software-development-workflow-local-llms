@@ -1,5 +1,5 @@
-import { createApp } from "./app.js";
-import { loadConfig } from "./config.js";
+import { createApp } from "./app";
+import { loadConfig } from "./config";
 
 try {
   process.loadEnvFile(".env");

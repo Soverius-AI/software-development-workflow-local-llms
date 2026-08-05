@@ -4,7 +4,7 @@ import {
   productionGraph,
   reviewers,
   selfImprovementGraph,
-} from "../src/graph-definition.js";
+} from "../src/graph-definition";
 
 test("the graph contract retains every agreed independent reviewer", () => {
   assert.deepEqual(

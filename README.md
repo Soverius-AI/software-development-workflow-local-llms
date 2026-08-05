@@ -127,7 +127,20 @@ pnpm start
 
 The service listens only on `127.0.0.1:4317`. `GET /health` shows whether an
 implementation occupies the slot, and `GET /runs` shows the durable run state.
-The event database and Mastra workflow snapshots live separately under `.data/`.
+The event database and Mastra workflow snapshots and observability traces live
+separately under `.data/`. Structured runtime logs are also written to the
+terminal.
+
+Run Mastra Studio to inspect the workflow graph and execution history:
+
+```sh
+pnpm studio
+```
+
+Open `http://localhost:4111`, select **Workflows**, then select the
+`github-implementation` workflow. Select a run in its **Runs** list to see step
+status, inputs, outputs, suspension state, timing, and traces persisted in
+`.data/mastra.sqlite`.
 
 The included [GitHub Actions workflow](.github/workflows/implementer.yml) uses a
 self-hosted runner labelled `implementer`. That runner opens an outbound

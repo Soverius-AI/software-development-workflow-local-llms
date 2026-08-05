@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import test from "node:test";
-import { normalizeGitHubEvent, verifyGitHubSignature } from "../src/github.js";
-import { EventStore } from "../src/store.js";
+import { normalizeGitHubEvent, verifyGitHubSignature } from "../src/github";
+import { EventStore } from "../src/store";
 import { createHmac } from "node:crypto";
 
 function makeStore(): EventStore {
