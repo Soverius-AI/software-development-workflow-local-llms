@@ -11,12 +11,27 @@ export interface AppConfig {
     installationId: string;
     privateKeyPath: string;
     apiBaseUrl: string;
+    gitBaseUrl: string;
     timeoutMs: number;
   } | null;
   githubOutboxRetryBaseMs: number;
   githubOutboxMaxAttempts: number;
   maxActiveImplementations: number;
-  simulatedImplementationMs: number;
+  implementation: {
+    repository: string;
+    repositoryPath: string;
+    baseBranch: string;
+    worktreeRoot: string;
+    checkConfigPath: string;
+    timeoutMs: number;
+    model: {
+      baseUrl: string;
+      apiKey: string;
+      modelId: string;
+    };
+    gitAuthorName: string;
+    gitAuthorEmail: string;
+  };
   readinessModel: {
     baseUrl: string;
     apiKey: string;
@@ -38,6 +53,11 @@ export function loadConfig(
     baseDirectory,
   );
   const githubApp = loadGitHubAppConfig(env, baseDirectory);
+  const modelBaseUrl = env.MODEL_BASE_URL ?? "http://127.0.0.1:8888/v1";
+  const modelApiKey = env.MODEL_API_KEY ?? "local";
+  const readinessModelId =
+    env.READINESS_MODEL ??
+    "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL";
   return {
     port: Number(env.PORT ?? 4317),
     databasePath,
@@ -54,16 +74,37 @@ export function loadConfig(
       Number(env.GITHUB_OUTBOX_MAX_ATTEMPTS ?? 8),
     ),
     maxActiveImplementations: Math.max(1, Number(env.MAX_ACTIVE_IMPLEMENTATIONS ?? 1)),
-    simulatedImplementationMs: Math.max(
-      0,
-      Number(env.SIMULATED_IMPLEMENTATION_MS ?? 250),
-    ),
+    implementation: {
+      repository:
+        env.GITHUB_REPOSITORY ??
+        "Soverius-AI/software-development-workflow-local-llms",
+      repositoryPath: path.resolve(
+        baseDirectory,
+        env.IMPLEMENTER_REPOSITORY_PATH ?? ".",
+      ),
+      baseBranch: env.IMPLEMENTER_BASE_BRANCH ?? "main",
+      worktreeRoot: path.resolve(
+        baseDirectory,
+        env.IMPLEMENTER_WORKTREE_ROOT ?? ".data/worktrees",
+      ),
+      checkConfigPath: env.IMPLEMENTER_CHECK_CONFIG ?? ".implementer.json",
+      timeoutMs: Math.max(
+        1,
+        Number(env.IMPLEMENTER_TIMEOUT_MS ?? 30 * 60_000),
+      ),
+      model: {
+        baseUrl: env.IMPLEMENTER_MODEL_BASE_URL ?? modelBaseUrl,
+        apiKey: env.IMPLEMENTER_MODEL_API_KEY ?? modelApiKey,
+        modelId: env.IMPLEMENTER_MODEL ?? readinessModelId,
+      },
+      gitAuthorName: env.IMPLEMENTER_GIT_AUTHOR_NAME ?? "Implementer Bot",
+      gitAuthorEmail:
+        env.IMPLEMENTER_GIT_AUTHOR_EMAIL ?? "implementer@users.noreply.github.com",
+    },
     readinessModel: {
-      baseUrl: env.MODEL_BASE_URL ?? "http://127.0.0.1:8888/v1",
-      apiKey: env.MODEL_API_KEY ?? "local",
-      modelId:
-        env.READINESS_MODEL ??
-        "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL",
+      baseUrl: modelBaseUrl,
+      apiKey: modelApiKey,
+      modelId: readinessModelId,
       timeoutMs: Math.max(1, Number(env.READINESS_TIMEOUT_MS ?? 120_000)),
     },
   };
@@ -87,6 +128,10 @@ function loadGitHubAppConfig(
     installationId,
     privateKeyPath: path.resolve(baseDirectory, privateKeyPath),
     apiBaseUrl: (env.GITHUB_API_BASE_URL ?? "https://api.github.com").replace(
+      /\/$/,
+      "",
+    ),
+    gitBaseUrl: (env.GITHUB_GIT_BASE_URL ?? "https://github.com").replace(
       /\/$/,
       "",
     ),

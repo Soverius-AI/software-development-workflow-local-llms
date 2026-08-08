@@ -1,6 +1,7 @@
 import { createSign } from "node:crypto";
 import fs from "node:fs";
-import type { AppConfig } from "./config";
+import type { AppConfig } from "../../config";
+import { runCheckedProcess } from "../../shared/process";
 
 export interface PublishedGitHubComment {
   id: number;
@@ -20,9 +21,35 @@ export interface GitHubCommentPublisher {
   ): Promise<PublishedGitHubComment>;
 }
 
+export interface PublishedPullRequest {
+  number: number;
+  url: string;
+}
+
+export interface GitHubPullRequestPublisher {
+  fetchBase(
+    repository: string,
+    repositoryPath: string,
+    baseBranch: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  pushBranch(
+    repository: string,
+    worktreePath: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  publishPullRequest(
+    repository: string,
+    options: { head: string; base: string; title: string; body: string },
+  ): Promise<PublishedPullRequest>;
+}
+
 type GitHubAppConfig = NonNullable<AppConfig["githubApp"]>;
 
-export class GitHubAppCommentPublisher implements GitHubCommentPublisher {
+export class GitHubAppCommentPublisher
+  implements GitHubCommentPublisher, GitHubPullRequestPublisher
+{
   private readonly privateKey: string;
   private cachedToken: { value: string; expiresAt: number } | null = null;
 
@@ -65,6 +92,101 @@ export class GitHubAppCommentPublisher implements GitHubCommentPublisher {
       { method: "POST", body: JSON.stringify({ body }) },
     );
     return { id: comment.id, url: comment.html_url };
+  }
+
+  async fetchBase(
+    repository: string,
+    repositoryPath: string,
+    baseBranch: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.authenticatedGit(
+      repository,
+      repositoryPath,
+      [
+        "fetch",
+        "--no-tags",
+        this.repositoryUrl(repository),
+        `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+      ],
+      signal,
+    );
+  }
+
+  async pushBranch(
+    repository: string,
+    worktreePath: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.authenticatedGit(
+      repository,
+      worktreePath,
+      [
+        "push",
+        "--set-upstream",
+        this.repositoryUrl(repository),
+        `HEAD:refs/heads/${branch}`,
+      ],
+      signal,
+    );
+  }
+
+  async publishPullRequest(
+    repository: string,
+    options: { head: string; base: string; title: string; body: string },
+  ): Promise<PublishedPullRequest> {
+    const { owner, name } = splitRepository(repository);
+    const existing = await this.request<
+      Array<{ number: number; html_url: string }>
+    >(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls?state=open&head=${encodeURIComponent(`${owner}:${options.head}`)}&base=${encodeURIComponent(options.base)}`,
+    );
+    if (existing[0]) {
+      return { number: existing[0].number, url: existing[0].html_url };
+    }
+    const pullRequest = await this.request<{
+      number: number;
+      html_url: string;
+    }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          title: options.title,
+          body: options.body,
+          head: options.head,
+          base: options.base,
+        }),
+      },
+    );
+    return { number: pullRequest.number, url: pullRequest.html_url };
+  }
+
+  private repositoryUrl(repository: string): string {
+    const { owner, name } = splitRepository(repository);
+    return `${this.config.gitBaseUrl}/${encodeURIComponent(owner)}/${encodeURIComponent(name)}.git`;
+  }
+
+  private async authenticatedGit(
+    repository: string,
+    cwd: string,
+    args: string[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const token = await this.installationToken();
+    await runCheckedProcess("git", args, {
+      cwd,
+      timeoutMs: this.config.timeoutMs,
+      ...(signal ? { signal } : {}),
+      env: {
+        ...process.env,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `http.${this.repositoryUrl(repository)}.extraheader`,
+        GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    });
   }
 
   private async request<T>(pathname: string, init: RequestInit = {}): Promise<T> {

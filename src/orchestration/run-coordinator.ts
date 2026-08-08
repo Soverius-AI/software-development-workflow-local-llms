@@ -1,6 +1,6 @@
 import type { Workflow } from "@mastra/core/workflows";
-import type { EventStore } from "./store";
-import type { WorkflowRunRecord } from "./types";
+import type { WorkflowRunRecord } from "../persistence/records";
+import type { EventStore } from "../persistence/event-store";
 
 export class RunCoordinator {
   private active = 0;
@@ -12,7 +12,6 @@ export class RunCoordinator {
     private readonly store: EventStore,
     private readonly workflow: Workflow<any, any, any, any, any, any, any, any>,
     private readonly maxActive: number,
-    private readonly implementationMs: number,
     private readonly onGitHubCommentQueued: () => void = () => {},
   ) {}
 
@@ -83,16 +82,14 @@ export class RunCoordinator {
         inputData: {
           controlRunId: record.id,
           correlationKey: record.correlationKey,
-          implementationMs: this.implementationMs,
           queuedEventsSeen: 0,
         },
       });
 
       this.finish(record.id, result);
     } catch (error) {
-      this.store.setStatus(record.id, "failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const queued = this.store.failRunAndEnqueueComment(record.id, error);
+      if (queued) this.onGitHubCommentQueued();
     }
   }
 
@@ -137,9 +134,11 @@ export class RunCoordinator {
       if (queued) this.onGitHubCommentQueued();
       return;
     }
-    this.store.setStatus(recordId, "failed", {
-      error: result.error?.message ?? `Mastra ended with ${result.status}`,
-    });
+    const queued = this.store.failRunAndEnqueueComment(
+      recordId,
+      result.error?.message ?? `Mastra ended with ${result.status}`,
+    );
+    if (queued) this.onGitHubCommentQueued();
   }
 }
 

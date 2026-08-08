@@ -1,4 +1,4 @@
-/** Machine-readable contract for the graph we are building. */
+/** Machine-readable contract for the graphs we are building. */
 export const PRODUCTION_GRAPH_VERSION = "production-v1";
 
 export type NodeStatus = "implemented" | "partial" | "planned";
@@ -41,13 +41,13 @@ export const productionGraph: readonly GraphNodeDefinition[] = [
   { id: "github-ingest", responsibility: "Persist, deduplicate, correlate, and acknowledge GitHub events.", kind: "deterministic", status: "implemented" },
   { id: "readiness-and-decomposition", responsibility: "Verify sufficient context and decide whether the issue should be split into child issues.", kind: "agent", status: "partial" },
   { id: "human-clarification", responsibility: "Suspend and resume when missing information or a product decision requires a human.", kind: "human-gate", status: "partial" },
-  { id: "codex-goal-implementation", responsibility: "Implement one accepted issue in an isolated worktree against explicit acceptance criteria.", kind: "agent", status: "planned" },
-  { id: "deterministic-checks", responsibility: "Run repository-owned tests, builds, linting, type checks, and policy checks.", kind: "deterministic", status: "planned" },
-  { id: "specialist-reviewers", responsibility: "Run the independent reviewer set in parallel against one fixed implementation snapshot.", kind: "parallel", status: "planned" },
+  { id: "codex-goal-implementation", responsibility: "Implement one accepted issue in an isolated worktree against explicit acceptance criteria.", kind: "agent", status: "implemented" },
+  { id: "deterministic-checks", responsibility: "Run repository-owned tests, builds, linting, type checks, and policy checks.", kind: "deterministic", status: "implemented" },
+  { id: "specialist-reviewers", responsibility: "Run the independent reviewer set in parallel against one fixed implementation snapshot.", kind: "parallel", status: "partial" },
   { id: "review-manager", responsibility: "Consolidate evidence, resolve compatible findings, route repairs, and expose true conflicts.", kind: "agent", status: "planned" },
   { id: "human-conflict-decision", responsibility: "Choose between irreconcilable recommendations using their evidence and trade-offs.", kind: "human-gate", status: "planned" },
-  { id: "pull-request", responsibility: "Publish an approved, verified change and its evidence exactly once.", kind: "side-effect", status: "planned" },
-  { id: "recorder", responsibility: "Append reconstructable run evidence without modifying the active graph.", kind: "deterministic", status: "planned" },
+  { id: "pull-request", responsibility: "Publish an approved, verified change and its evidence exactly once.", kind: "side-effect", status: "partial" },
+  { id: "recorder", responsibility: "Append reconstructable run evidence without modifying the active graph.", kind: "deterministic", status: "partial" },
 ] as const;
 
 export const selfImprovementGraph: readonly GraphNodeDefinition[] = [

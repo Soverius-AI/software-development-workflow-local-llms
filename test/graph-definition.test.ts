@@ -6,7 +6,7 @@ import {
   refactoringGraph,
   reviewers,
   selfImprovementGraph,
-} from "../src/graph-definition";
+} from "../src/workflows/definitions";
 
 test("the graph contract retains every agreed independent reviewer", () => {
   assert.deepEqual(
@@ -36,7 +36,11 @@ test("production and scheduled loops remain separate graphs with explicit status
   );
   assert.equal(
     productionGraph.find(({ id }) => id === "codex-goal-implementation")?.status,
-    "planned",
+    "implemented",
+  );
+  assert.equal(
+    productionGraph.find(({ id }) => id === "specialist-reviewers")?.status,
+    "partial",
   );
   assert.equal(
     productionGraph.find(({ id }) => id === "readiness-and-decomposition")

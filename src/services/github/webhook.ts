@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { NormalizedGitHubEvent } from "./types";
+import type { NormalizedGitHubEvent } from "./contracts";
 
 type GitHubPayload = Record<string, any>;
 

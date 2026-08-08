@@ -23,6 +23,7 @@
     "@mastra/libsql": "1.18.0",
     "@mastra/loggers": "1.2.0",
     "@mastra/observability": "1.16.3",
+    "@openai/codex-sdk": "^0.147.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -1,5 +1,6 @@
 import { loadConfig } from "../src/config";
-import { createReadinessEvaluator } from "../src/readiness";
+import { createReadinessEvaluator } from "../src/services/readiness/evaluator";
+import { readinessDecisionSchema } from "../src/workflows/implementation/steps/readiness/readiness.definition";
 
 try {
   process.loadEnvFile(".env");
@@ -8,7 +9,10 @@ try {
 }
 
 const config = loadConfig();
-const { evaluator } = createReadinessEvaluator(config.readinessModel);
+const { evaluator } = createReadinessEvaluator(
+  config.readinessModel,
+  readinessDecisionSchema,
+);
 const result = await evaluator.evaluate(
   {
     controlRunId: "readiness-live-check",
