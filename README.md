@@ -3,8 +3,9 @@
 The intended system is a complete development graph: issue readiness and
 decomposition, Codex goal-based implementation, deterministic checks, parallel
 specialist reviewers, manager consolidation and human escalation, recording,
-and a separate scheduled self-improvement graph. The durable GitHub → Mastra
-loop below is the first implemented slice, not the complete workflow.
+and separate scheduled graphs for self-improvement, refactoring discovery, and
+new-feature suggestions. The durable GitHub → Mastra loop below is the first
+implemented slice, not the complete workflow.
 
 Future agent sessions should begin with `AGENTS.md`. The full design, reviewer
 contract, conflict handling, visual-design evidence, recorder, and learning
@@ -96,6 +97,14 @@ GitHub events are recorded in SQLite first and acknowledged quickly. A
 coordinator gives Mastra at most one implementation slot by default. An event
 that arrives while Mastra is working never interrupts the current model turn.
 
+Before the simulated implementation step, a real readiness agent calls the
+OpenAI-compatible model configured in `.env`. It evaluates the issue title,
+body, labels, and human clarifications against a structured schema. Every
+attempt appends its input, decision, model ID, prompt version, graph version, timing, usage,
+and error state to `readiness_evaluations`. An underspecified issue suspends at
+the readiness step; a subsequent human issue comment is durable input to a new
+evaluation of that same Mastra run. Issue decomposition is not implemented yet.
+
 For the same issue, the coordinator attaches the event to the existing run's
 inbox. For a different issue it creates another run, which waits for the local
 implementation slot. GitHub delivery IDs make retries harmless, and messages
@@ -125,11 +134,58 @@ cp .env.example .env
 pnpm start
 ```
 
+The readiness agent expects an OpenAI-compatible model server. These values are
+deployment configuration and belong in the ignored `.env` file:
+
+```dotenv
+MODEL_BASE_URL=http://127.0.0.1:8888/v1
+MODEL_API_KEY=local
+READINESS_MODEL=unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL
+READINESS_TIMEOUT_MS=120000
+```
+
+`READINESS_TIMEOUT_MS` prevents a stalled local generation from occupying the
+workflow indefinitely. No small output-token limit is imposed.
+
 The service listens only on `127.0.0.1:4317`. `GET /health` shows whether an
 implementation occupies the slot, and `GET /runs` shows the durable run state.
 The event database and Mastra workflow snapshots and observability traces live
 separately under `.data/`. Structured runtime logs are also written to the
 terminal.
+
+### Post readiness questions to GitHub
+
+The receiver can use a GitHub App to post a readiness question directly on the
+issue that owns the suspended run. Create an app with repository permissions
+**Metadata: read** and **Issues: read and write**, install it on the target
+repository, download its private key, and place that PEM file in the ignored
+`.secrets/` directory. Then configure the ignored `.env` file:
+
+```dotenv
+GITHUB_APP_ID=123456
+GITHUB_APP_INSTALLATION_ID=78901234
+GITHUB_APP_PRIVATE_KEY_PATH=.secrets/github-app.pem
+GITHUB_BOT_LOGIN=your-app-slug[bot]
+```
+
+All three `GITHUB_APP_*` settings must be present together. With no GitHub App
+configured, readiness still suspends and its question remains visible in
+Mastra Studio and in the pending `github_comment_outbox` row, but nothing is
+posted externally.
+
+Question delivery is independent of the short Actions job. The suspension and
+outbox row are committed together; the local outbox worker obtains a short-lived
+installation token, looks for the unique run marker, and then posts if needed.
+Transient failures use exponential backoff. On restart, an uncertain send is
+reconciled by marker before another comment can be created. The marker also
+causes the resulting bot webhook to be ignored, preventing a feedback loop.
+Only human comments received after the recorded suspension boundary can resume
+that question.
+
+`GET /health` reports whether GitHub comment delivery is enabled and the number
+of pending or failed deliveries. `GET /github-comments` exposes the local
+outbox history, including attempts, errors, and the resulting GitHub comment
+URL.
 
 Run Mastra Studio to inspect the workflow graph and execution history:
 
@@ -186,27 +242,35 @@ commit the downloaded runner or its registration credentials.
 
 ## Human decisions
 
-Add the label `needs-human` to demonstrate suspension. Mastra stores the
-suspended workflow snapshot and the control database marks the run as
-`waiting_human`. A subsequent human issue comment resumes the exact run. Other
-issues may proceed while this one waits.
+Create an issue without enough information or observable acceptance criteria to
+demonstrate suspension. Mastra stores the suspended readiness snapshot and the
+control database records the pending step, clarification question, reply
+boundary, and durable GitHub comment. A subsequent human issue comment resumes
+the exact readiness step and triggers a new recorded evaluation. Other issues
+may proceed while this one waits.
 
 ## Where Codex fits today
 
-The current implementation step deliberately waits for
-`SIMULATED_IMPLEMENTATION_MS`; this makes concurrency deterministic in the demo
-and tests. It still needs to be replaced by the real Codex goal worker. The
-readiness node, reviewers, manager, recorder, pull-request integration, and
-self-improvement graph are specified but explicitly marked as planned.
+The readiness portion of `readiness-and-decomposition` is implemented; deciding
+whether to propose child issues remains planned. The implementation step still
+deliberately waits for `SIMULATED_IMPLEMENTATION_MS`; this makes concurrency
+deterministic in the demo and tests. It still needs to be replaced by the real
+Codex goal worker. The reviewers, manager, general recorder, pull-request
+integration, and all three scheduled graphs—self-improvement, refactoring
+discovery, and new-feature suggestion—remain planned. Refactoring and feature
+discovery only create human-reviewed proposals; approved proposals re-enter the
+ordinary production graph as issues.
 
 ## Verify
 
 ```sh
 pnpm typecheck
 pnpm test
+pnpm test:readiness:live
 ```
 
 The integration tests cover the critical race: a second delivery arrives while
 the first Mastra run is active, attaches to that run, and does not create a
-second implementation. They also exercise real Mastra suspension and resumption
-from a GitHub comment.
+second implementation. They also exercise readiness success, recorded retry,
+and real Mastra suspension and resumption from a GitHub comment. The live check
+is intentionally separate because it requires the configured local model.

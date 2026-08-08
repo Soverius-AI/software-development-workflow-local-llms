@@ -12,6 +12,8 @@ Successful runs may proceed to a pull request and human approval. All steps emit
 
 The self-improvement graph is a separate scheduled process. It reads newly recorded runs after `lastAnalysedRunId`, distils recurring lessons, proposes versioned candidate changes, and evaluates each candidate against a frozen baseline using replay cases. A candidate is promoted only when it improves the agreed metrics without violating regression or safety gates and a human approves it.
 
+Two additional scheduled graphs are planned. The refactoring graph discovers evidence-backed structural maintenance opportunities in a bounded repository scope. The feature-suggestion graph uses bounded product signals to propose new capabilities with explicit assumptions and acceptance criteria. Neither graph writes production code directly: both require human approval before creating an issue that enters the normal readiness and implementation graph.
+
 ## Validation boundaries
 
 Keep these concepts separate in code and documentation:
@@ -32,6 +34,6 @@ Do not let the system review or merge its own bot-generated GitHub events. Versi
 
 ## Current implementation status
 
-The repository currently implements GitHub ingestion, duplicate suppression, same-issue correlation, a local implementation-slot queue, Mastra persistence, and human suspension/resumption. The implementation action is still simulated. The readiness/decomposition node, real Codex goal worker, reviewer fan-out, manager, recorder schema, pull-request integration, and scheduled learning graph remain to be implemented. Do not describe those pieces as complete until code and tests exist.
+The repository currently implements GitHub ingestion, duplicate suppression, same-issue correlation, a local implementation-slot queue, Mastra persistence, the readiness half of readiness/decomposition, append-only readiness evidence, a durable GitHub clarification-comment outbox with retry and marker reconciliation, and step-aware human suspension/resumption. Only comments received after a suspension boundary may answer that suspension. GitHub question posting requires a configured GitHub App. The implementation action is still simulated. Decomposition and child-issue proposals, the real Codex goal worker, reviewer fan-out, manager, general recorder schema, pull-request integration, and the self-improvement, refactoring, and feature-suggestion scheduled graphs remain to be implemented. Do not describe those pieces as complete until code and tests exist.
 
 When adding a node, update `docs/architecture.md`, add durable state for its inputs and outputs, and test success, retry, suspension, and duplicate-delivery behavior where applicable.

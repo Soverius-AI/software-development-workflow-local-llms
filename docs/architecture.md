@@ -22,7 +22,7 @@ flowchart TD
   P --> O["Recorder / experience store"]
 ```
 
-Readiness is explicit because implementation must not compensate for an underspecified issue by inventing product decisions. It checks the definition of done, constraints, affected behaviour, required visual references, and available repository context. If the change contains multiple independently deliverable outcomes, it proposes child issues with separate acceptance criteria. Creating them is a human-approved side effect.
+Readiness is explicit because implementation must not compensate for an underspecified issue by inventing product decisions. It checks the definition of done, constraints, affected behaviour, required visual references, and available repository context. The implemented readiness agent returns a structured decision and persists every input, output, model ID, prompt version, graph version, usage record, retry, and error in an append-only evaluation table. A missing-information decision suspends the readiness step and atomically adds a question to a durable GitHub-comment outbox. When a GitHub App is configured, the outbox posts the question with a run marker, retries transient failures, and reconciles that marker before retrying so a crash after a successful API call does not duplicate the comment. A human issue comment received after the suspension boundary is added to the durable input and resumes the same Mastra run. Earlier comments cannot accidentally answer a question that did not yet exist. If the change contains multiple independently deliverable outcomes, the intended graph will propose child issues with separate acceptance criteria. That decomposition and the human-approved child-issue side effect remain planned.
 
 The implementation node has exclusive write access to an isolated worktree. Codex uses a persistent goal containing the accepted outcome, constraints, and verification criteria. Its internal corrections and goal completion are useful but do not count as independent review. Repository-owned tests, builds, linting, type checks, and policy checks run before reviewers receive an immutable commit or diff.
 
@@ -38,11 +38,11 @@ Repair loops are bounded. Exceeding the maximum implementation/review iterations
 
 ## Events and concurrency
 
-Every delivery is persisted before acknowledgement. Duplicate delivery IDs are no-ops. An event for an active issue joins its inbox and is read at a safe boundary; it never interrupts a model turn. Different issues retain independent durable state, while a lease prevents two writers from using the same worktree. Reviewers may run in parallel because they are read-only. Bot-authored events and run markers prevent self-triggering.
+Every delivery is persisted before acknowledgement. Duplicate delivery IDs are no-ops. An event for an active issue joins its inbox and is read at a safe boundary; it never interrupts a model turn. Different issues retain independent durable state, while a lease prevents two writers from using the same worktree. Reviewers may run in parallel because they are read-only. Bot-authored events and run markers prevent self-triggering. GitHub comment delivery is a separate durable side effect: `pending`, `sending`, `retry`, `sent`, and `failed` states plus attempt counts, API result IDs, URLs, errors, and timestamps remain inspectable in `github_comment_outbox`.
 
-The current code implements this control-plane slice and generic Mastra suspension/resumption. `src/graph-definition.ts` records which nodes are implemented, partial, or planned so future sessions cannot mistake the design for completed behaviour.
+The current code implements this control-plane slice, the readiness half of readiness-and-decomposition, durable readiness evidence, durable GitHub clarification delivery, and step-aware Mastra suspension/resumption. `src/graph-definition.ts` records which nodes are implemented, partial, or planned so future sessions cannot mistake the design for completed behaviour.
 
-## Recorder and separate self-improvement graph
+## Recorder and separate scheduled graphs
 
 Every production node will emit an append-only record containing its inputs, outputs, timestamps, tool calls, command results, changed files, deterministic results, reviewer findings, manager resolutions, human decisions, merge/revert/regression outcome, and exact model, prompt, skill, rubric, and graph versions. The recorder observes production; it never changes the graph that generated the evidence.
 
@@ -62,3 +62,20 @@ flowchart LR
 The learning graph is scheduled separately from production. `lastAnalysedRunId` makes discovery incremental, while older runs remain as replay and regression cases. Baseline and candidate run the same representative cases. Quality, completion, regressions, safety, cost, latency, iteration count, and escalation rate are compared. Frequency or plausible wording is not proof of improvement.
 
 Promotion is versioned and human-approved, affects only future runs, and retains the previous version for rollback. This boundary makes the system self-improving without allowing it to silently rewrite its own rules during active development.
+
+Two further scheduled graphs are planned. The **refactoring graph** periodically inspects a bounded repository scope for structural maintenance opportunities. It must attach concrete evidence, expected benefit, risk, and a measurable definition of done to every proposal. The **feature-suggestion graph** combines bounded product signals—such as user feedback, open issues, usage evidence, and existing capabilities—to propose genuinely new features with explicit assumptions and testable acceptance criteria.
+
+Neither scheduled graph writes production code or silently creates accepted work. Each produces proposals for human review. Approved proposals become ordinary issues and enter the same readiness and production implementation graph as human-authored work. This keeps product prioritisation and repository-wide maintenance decisions outside autonomous code modification.
+
+```mermaid
+flowchart LR
+  T["Schedules"] --> SI["Self-improvement"]
+  T --> RF["Refactoring discovery"]
+  T --> FS["Feature suggestions"]
+  SI --> HP["Human promotion"]
+  RF --> HI["Human-approved issue"]
+  FS --> HI
+  HI --> PG["Production implementation graph"]
+```
+
+All three scheduled graphs remain planned. They have distinct purposes: self-improvement changes the development system itself, refactoring proposes improvements to existing code structure, and feature suggestion proposes new product behaviour.
