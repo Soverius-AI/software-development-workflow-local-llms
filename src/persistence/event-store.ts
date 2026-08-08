@@ -5,13 +5,19 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   IngestResult,
   GitHubCommentOutboxRecord,
-  NormalizedGitHubEvent,
+  ImplementationAttemptRecord,
+  ImplementationStage,
   ReadinessEvaluationRecord,
   ReadinessEvaluationResult,
-  ReadinessInput,
   RunStatus,
   WorkflowRunRecord,
-} from "./types";
+} from "./records";
+import type {
+  ImplementationCheckDefinition,
+  ImplementationCheckResult,
+} from "../services/checks/contracts";
+import type { NormalizedGitHubEvent } from "../services/github/contracts";
+import type { ReadinessInput } from "../services/readiness/contracts";
 
 const ACTIVE_STATUSES = "'queued','running','waiting_human'";
 
@@ -110,6 +116,42 @@ export class EventStore {
       );
       CREATE INDEX IF NOT EXISTS github_comment_outbox_due
         ON github_comment_outbox(status, next_attempt_at);
+
+      CREATE TABLE IF NOT EXISTS implementation_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES workflow_runs(id),
+        attempt INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        repository_path TEXT NOT NULL,
+        worktree_path TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        base_sha TEXT,
+        codex_thread_id TEXT,
+        goal TEXT NOT NULL,
+        model_base_url TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        checks_json TEXT NOT NULL DEFAULT '[]',
+        check_results_json TEXT,
+        final_response TEXT,
+        review_json TEXT,
+        commit_sha TEXT,
+        pull_request_url TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE(run_id, attempt)
+      );
+
+      CREATE TABLE IF NOT EXISTS implementation_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attempt_id INTEGER NOT NULL REFERENCES implementation_attempts(id),
+        event_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS implementation_events_attempt
+        ON implementation_events(attempt_id, id);
     `);
     const runColumns = this.db
       .prepare("PRAGMA table_info(workflow_runs)")
@@ -186,6 +228,48 @@ export class EventStore {
          WHERE status = 'sending'`,
       )
       .run(now, now);
+    this.recoverInterruptedRuns(now);
+  }
+
+  private recoverInterruptedRuns(now: string): void {
+    const interrupted = this.db
+      .prepare(
+        `SELECT id, repository, issue_number FROM workflow_runs
+         WHERE status = 'running'`,
+      )
+      .all() as Array<{
+      id: string;
+      repository: string;
+      issue_number: number | null;
+    }>;
+    for (const run of interrupted) {
+      const error =
+        "The implementer process stopped while this run was active. Its worktree was retained for diagnosis; the run was not retried automatically.";
+      this.db
+        .prepare(
+          `UPDATE workflow_runs SET status = 'failed', last_error = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(error, now, run.id);
+      this.db
+        .prepare(
+          `UPDATE implementation_attempts
+           SET status = 'error', error = ?, completed_at = ?
+           WHERE run_id = ? AND status = 'running'`,
+        )
+        .run(error, now, run.id);
+      if (run.issue_number !== null) {
+        const marker = `<!-- mastra-loop:${run.id}:implementation:interrupted -->`;
+        this.insertGitHubCommentOutbox(
+          run.id,
+          run.repository,
+          run.issue_number,
+          formatImplementationFailureComment("interrupted", error, marker),
+          marker,
+          now,
+        );
+      }
+    }
   }
 
   ingest(event: NormalizedGitHubEvent, botLogin: string): IngestResult {
@@ -505,6 +589,226 @@ export class EventStore {
     }));
   }
 
+  startImplementationAttempt(input: {
+    runId: string;
+    repositoryPath: string;
+    worktreePath: string;
+    branch: string;
+    goal: string;
+    modelBaseUrl: string;
+    modelId: string;
+    promptVersion: string;
+  }): number {
+    const attemptRow = this.db
+      .prepare(
+        `SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt
+         FROM implementation_attempts WHERE run_id = ?`,
+      )
+      .get(input.runId) as { attempt: number };
+    const result = this.db
+      .prepare(
+        `INSERT INTO implementation_attempts
+         (run_id, attempt, status, stage, repository_path, worktree_path,
+          branch, goal, model_base_url, model_id, prompt_version, created_at)
+         VALUES (?, ?, 'running', 'preparing', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.runId,
+        attemptRow.attempt,
+        input.repositoryPath,
+        input.worktreePath,
+        input.branch,
+        input.goal,
+        input.modelBaseUrl,
+        input.modelId,
+        input.promptVersion,
+        new Date().toISOString(),
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  configureImplementationAttempt(
+    id: number,
+    baseSha: string,
+    checks: ImplementationCheckDefinition[],
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE implementation_attempts SET base_sha = ?, checks_json = ?
+         WHERE id = ?`,
+      )
+      .run(baseSha, JSON.stringify(checks), id);
+  }
+
+  setImplementationStage(id: number, stage: ImplementationStage): void {
+    this.db
+      .prepare(
+        `UPDATE implementation_attempts SET stage = ?
+         WHERE id = ? AND status = 'running'`,
+      )
+      .run(stage, id);
+  }
+
+  setCodexThreadId(id: number, threadId: string): void {
+    this.db
+      .prepare(
+        "UPDATE implementation_attempts SET codex_thread_id = ? WHERE id = ?",
+      )
+      .run(threadId, id);
+  }
+
+  appendImplementationEvent(id: number, event: unknown): void {
+    this.db
+      .prepare(
+        `INSERT INTO implementation_events (attempt_id, event_json, created_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(id, JSON.stringify(event), new Date().toISOString());
+  }
+
+  completeCodexImplementation(id: number, finalResponse: string): void {
+    this.db
+      .prepare(
+        "UPDATE implementation_attempts SET final_response = ? WHERE id = ?",
+      )
+      .run(finalResponse, id);
+  }
+
+  recordImplementationCheck(
+    id: number,
+    result: ImplementationCheckResult,
+  ): void {
+    const row = this.db
+      .prepare("SELECT check_results_json FROM implementation_attempts WHERE id = ?")
+      .get(id) as { check_results_json: string | null } | undefined;
+    if (!row) throw new Error(`Implementation attempt ${id} does not exist.`);
+    const results = row.check_results_json
+      ? (JSON.parse(row.check_results_json) as ImplementationCheckResult[])
+      : [];
+    results.push(result);
+    this.db
+      .prepare(
+        "UPDATE implementation_attempts SET check_results_json = ? WHERE id = ?",
+      )
+      .run(JSON.stringify(results), id);
+  }
+
+  recordImplementationSnapshot(id: number, commitSha: string): void {
+    this.db
+      .prepare("UPDATE implementation_attempts SET commit_sha = ? WHERE id = ?")
+      .run(commitSha, id);
+  }
+
+  recordStubReview(id: number, review: unknown): void {
+    this.db
+      .prepare("UPDATE implementation_attempts SET review_json = ? WHERE id = ?")
+      .run(JSON.stringify(review), id);
+  }
+
+  completeImplementationAttempt(id: number, pullRequestUrl: string): void {
+    this.db
+      .prepare(
+        `UPDATE implementation_attempts
+         SET status = 'success', stage = 'completed', pull_request_url = ?,
+           error = NULL, completed_at = ? WHERE id = ?`,
+      )
+      .run(pullRequestUrl, new Date().toISOString(), id);
+  }
+
+  failImplementationAttempt(id: number, error: unknown): void {
+    this.db
+      .prepare(
+        `UPDATE implementation_attempts
+         SET status = 'error', error = ?, completed_at = ?
+         WHERE id = ? AND status = 'running'`,
+      )
+      .run(errorMessage(error), new Date().toISOString(), id);
+  }
+
+  getImplementationAttempt(id: number): ImplementationAttemptRecord | null {
+    const row = this.db
+      .prepare("SELECT * FROM implementation_attempts WHERE id = ?")
+      .get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapImplementationAttempt(row) : null;
+  }
+
+  getLatestImplementationAttempt(runId: string): ImplementationAttemptRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM implementation_attempts
+         WHERE run_id = ? ORDER BY attempt DESC LIMIT 1`,
+      )
+      .get(runId) as Record<string, unknown> | undefined;
+    return row ? this.mapImplementationAttempt(row) : null;
+  }
+
+  listImplementationAttempts(runId?: string): ImplementationAttemptRecord[] {
+    const rows = (runId
+      ? this.db
+          .prepare(
+            "SELECT * FROM implementation_attempts WHERE run_id = ? ORDER BY attempt",
+          )
+          .all(runId)
+      : this.db
+          .prepare("SELECT * FROM implementation_attempts ORDER BY id")
+          .all()) as Record<string, unknown>[];
+    return rows.map((row) => this.mapImplementationAttempt(row));
+  }
+
+  failRunAndEnqueueComment(runId: string, error: unknown): boolean {
+    const now = new Date().toISOString();
+    const message = errorMessage(error);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const run = this.db
+        .prepare(
+          "SELECT repository, issue_number FROM workflow_runs WHERE id = ?",
+        )
+        .get(runId) as
+        | { repository: string; issue_number: number | null }
+        | undefined;
+      if (!run) throw new Error(`Workflow run ${runId} does not exist.`);
+      const attempt = this.db
+        .prepare(
+          `SELECT stage FROM implementation_attempts
+           WHERE run_id = ? ORDER BY attempt DESC LIMIT 1`,
+        )
+        .get(runId) as { stage: string } | undefined;
+      this.db
+        .prepare(
+          `UPDATE workflow_runs SET status = 'failed', pending_step = NULL,
+           pending_question = NULL, answer_after_event_id = NULL,
+           last_error = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(message, now, runId);
+      this.db
+        .prepare(
+          `UPDATE implementation_attempts
+           SET status = 'error', error = ?, completed_at = ?
+           WHERE run_id = ? AND status = 'running'`,
+        )
+        .run(message, now, runId);
+      let queued = false;
+      if (run.issue_number !== null) {
+        const stage = attempt?.stage ?? "starting";
+        const marker = `<!-- mastra-loop:${runId}:implementation:failed -->`;
+        queued = this.insertGitHubCommentOutbox(
+          runId,
+          run.repository,
+          run.issue_number,
+          formatImplementationFailureComment(stage, message, marker),
+          marker,
+          now,
+        );
+      }
+      this.db.exec("COMMIT");
+      return queued;
+    } catch (caught) {
+      this.db.exec("ROLLBACK");
+      throw caught;
+    }
+  }
+
   getRun(id: string): WorkflowRunRecord | null {
     const row = this.db
       .prepare("SELECT * FROM workflow_runs WHERE id = ?")
@@ -745,6 +1049,72 @@ export class EventStore {
       .run(new Date().toISOString(), runId);
   }
 
+  private insertGitHubCommentOutbox(
+    runId: string,
+    repository: string,
+    issueNumber: number,
+    body: string,
+    marker: string,
+    now: string,
+  ): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO github_comment_outbox
+         (run_id, repository, issue_number, body, marker, status, attempts,
+          next_attempt_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        repository,
+        issueNumber,
+        body,
+        marker,
+        now,
+        now,
+        now,
+      );
+    return result.changes === 1;
+  }
+
+  private mapImplementationAttempt(
+    row: Record<string, unknown>,
+  ): ImplementationAttemptRecord {
+    return {
+      id: Number(row.id),
+      runId: String(row.run_id),
+      attempt: Number(row.attempt),
+      status: String(row.status) as ImplementationAttemptRecord["status"],
+      stage: String(row.stage) as ImplementationStage,
+      repositoryPath: String(row.repository_path),
+      worktreePath: String(row.worktree_path),
+      branch: String(row.branch),
+      baseSha: row.base_sha === null ? null : String(row.base_sha),
+      codexThreadId:
+        row.codex_thread_id === null ? null : String(row.codex_thread_id),
+      goal: String(row.goal),
+      modelBaseUrl: String(row.model_base_url),
+      modelId: String(row.model_id),
+      promptVersion: String(row.prompt_version),
+      checks: JSON.parse(String(row.checks_json)) as ImplementationCheckDefinition[],
+      checkResults:
+        row.check_results_json === null
+          ? null
+          : (JSON.parse(String(row.check_results_json)) as ImplementationCheckResult[]),
+      finalResponse:
+        row.final_response === null ? null : String(row.final_response),
+      review:
+        row.review_json === null ? null : JSON.parse(String(row.review_json)),
+      commitSha: row.commit_sha === null ? null : String(row.commit_sha),
+      pullRequestUrl:
+        row.pull_request_url === null ? null : String(row.pull_request_url),
+      error: row.error === null ? null : String(row.error),
+      createdAt: String(row.created_at),
+      completedAt:
+        row.completed_at === null ? null : String(row.completed_at),
+    };
+  }
+
   private mapRun(row: Record<string, unknown>): WorkflowRunRecord {
     return {
       id: String(row.id),
@@ -790,4 +1160,29 @@ export class EventStore {
       sentAt: row.sent_at === null ? null : String(row.sent_at),
     };
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatImplementationFailureComment(
+  stage: string,
+  error: string,
+  marker: string,
+): string {
+  const summary = error.length > 2_000 ? `${error.slice(0, 2_000)}…` : error;
+  return `### Implementation stopped
+
+The run could not complete during **${stage}**.
+
+\`\`\`text
+${summary.replaceAll("```", "''' ")}
+\`\`\`
+
+The worktree was retained for diagnosis. The run was not retried automatically.
+
+Run ID: \`${marker.match(/mastra-loop:([^:]+)/)?.[1] ?? "unknown"}\`
+
+${marker}`;
 }

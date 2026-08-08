@@ -1,0 +1,21 @@
+{
+  "setup": [
+    {
+      "name": "install dependencies",
+      "command": ["pnpm", "install", "--frozen-lockfile"],
+      "timeoutMs": 300000
+    }
+  ],
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": ["pnpm", "typecheck"],
+      "timeoutMs": 120000
+    },
+    {
+      "name": "tests",
+      "command": ["pnpm", "test"],
+      "timeoutMs": 180000
+    }
+  ]
+}

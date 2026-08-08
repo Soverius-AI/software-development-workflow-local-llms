@@ -7,13 +7,28 @@ import type { AppConfig } from "../src/config";
 import type {
   GitHubCommentPublisher,
   PublishedGitHubComment,
-} from "../src/github-comments";
-import type { ReadinessEvaluator } from "../src/readiness";
-import type { ReadinessDecision, ReadinessInput } from "../src/types";
+} from "../src/services/github/client";
+import type {
+  ReadinessEvaluator,
+  ReadinessInput,
+} from "../src/services/readiness/contracts";
+import type {
+  CodexImplementationOutput,
+} from "../src/workflows/implementation/steps/codex-implementation/codex-implementation.definition";
+import type { DeterministicChecksOutput } from "../src/workflows/implementation/steps/deterministic-checks/deterministic-checks.definition";
+import type {
+  PreparedWorktree,
+  PrepareWorktreeOutput,
+} from "../src/workflows/implementation/steps/prepare-worktree/prepare-worktree.definition";
+import type { ReviewerOutput } from "../src/workflows/implementation/steps/reviewer/reviewer.definition";
+import type { SnapshotOutput } from "../src/workflows/implementation/steps/snapshot/snapshot.definition";
+import type { ReadinessDecision } from "../src/workflows/implementation/steps/readiness/readiness.definition";
+import type { DemoCodexImplementationOutput } from "../src/workflows/demo-implementation/steps/codex-implementation/codex-implementation.definition";
 
 function config(implementationMs = 150): AppConfig {
   const id = randomUUID();
   return {
+    workflowMode: "production",
     port: 0,
     databasePath: path.join("/tmp", `loop-events-${id}.sqlite`),
     mastraDatabaseUrl: `file:${path.join("/tmp", `loop-mastra-${id}.sqlite`)}`,
@@ -23,7 +38,21 @@ function config(implementationMs = 150): AppConfig {
     githubOutboxRetryBaseMs: 10,
     githubOutboxMaxAttempts: 3,
     maxActiveImplementations: 1,
-    simulatedImplementationMs: implementationMs,
+    implementation: {
+      repository: "example/app",
+      repositoryPath: "/tmp/project",
+      baseBranch: "main",
+      worktreeRoot: "/tmp/worktrees",
+      checkConfigPath: ".implementer.json",
+      timeoutMs: 1_000,
+      model: {
+        baseUrl: "http://127.0.0.1:8888/v1",
+        apiKey: "local",
+        modelId: "test-implementer",
+      },
+      gitAuthorName: "Test Bot",
+      gitAuthorEmail: "test@example.com",
+    },
     readinessModel: {
       baseUrl: "http://127.0.0.1:8888/v1",
       apiKey: "local",
@@ -50,6 +79,9 @@ function payload(issue: number, labels: string[] = []) {
 test("an event arriving during a run is attached without starting a second run", async () => {
   const app = await createApp(config(250), {
     readinessEvaluator: readyEvaluator(),
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(250),
+    ),
   });
   try {
     const first = app.eventStore.ingest(
@@ -75,8 +107,62 @@ test("an event arriving during a run is attached without starting a second run",
   }
 });
 
+test("demo mode routes webhook runs through the reduced workflow", async () => {
+  const appConfig = config(0);
+  appConfig.workflowMode = "demo";
+  const service = new FakeImplementationService();
+  let demoPublished = false;
+  const app = await createApp(appConfig, {
+    readinessEvaluator: readyEvaluator(),
+    stepImplementations: {
+      ...fakeStepImplementations(service),
+      codexImplementation: {
+        execute: async () => {
+          throw new Error("the production Codex step must not run in demo mode");
+        },
+      },
+    },
+    demoStepImplementations: {
+      prepareWorktree: { execute: () => service.prepare() },
+      codexImplementation: {
+        execute: (input: PrepareWorktreeOutput) => service.implement(input),
+      },
+      publishPullRequest: {
+        execute: async (input: DemoCodexImplementationOutput) => {
+          demoPublished = true;
+          return {
+            ...input,
+            commitSha: "demo-commit",
+            pullRequestUrl: "https://github.test/pull/demo",
+          };
+        },
+      },
+    },
+  });
+  try {
+    const result = app.eventStore.ingest(
+      event("demo-route", "issues", payload(84)),
+      "loop-bot",
+    );
+    app.coordinator.wake();
+    await waitFor(
+      () => app.eventStore.getRun(result.runId!)?.status === "completed",
+    );
+    assert.equal(demoPublished, true);
+    assert.equal(
+      app.eventStore.listReadinessEvaluations(result.runId!)[0]?.graphVersion,
+      "demo-v1",
+    );
+  } finally {
+    await app.close();
+  }
+});
+
 test("a human comment resumes the suspended Mastra run", async () => {
   const app = await createApp(config(10), {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(10),
+    ),
     readinessEvaluator: evaluator((input) =>
       input.clarifications.length === 0
         ? {
@@ -139,6 +225,9 @@ test("a human comment resumes the suspended Mastra run", async () => {
 test("a suspended readiness run posts its question through the durable outbox", async () => {
   const publisher = new FakeGitHubCommentPublisher();
   const app = await createApp(config(0), {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(),
+    ),
     readinessEvaluator: evaluator(() => notReadyDecision()),
     githubCommentPublisher: publisher,
   });
@@ -168,6 +257,9 @@ test("a suspended readiness run posts its question through the durable outbox", 
 test("GitHub comment delivery retries a transient API failure", async () => {
   const publisher = new FakeGitHubCommentPublisher(1);
   const app = await createApp(config(0), {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(),
+    ),
     readinessEvaluator: evaluator(() => notReadyDecision()),
     githubCommentPublisher: publisher,
   });
@@ -194,6 +286,9 @@ test("GitHub comment delivery retries a transient API failure", async () => {
 test("restart recovery reconciles an existing GitHub comment instead of duplicating it", async () => {
   const appConfig = config(0);
   const firstApp = await createApp(appConfig, {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(),
+    ),
     readinessEvaluator: evaluator(() => notReadyDecision()),
   });
   const result = firstApp.eventStore.ingest(
@@ -215,6 +310,9 @@ test("restart recovery reconciles an existing GitHub comment instead of duplicat
     body: `Recovered comment\n\n${pending.marker}`,
   });
   const secondApp = await createApp(appConfig, {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(),
+    ),
     readinessEvaluator: evaluator(() => notReadyDecision()),
     githubCommentPublisher: publisher,
   });
@@ -234,6 +332,9 @@ test("restart recovery reconciles an existing GitHub comment instead of duplicat
 
 test("the comment that starts a run cannot answer a question created later", async () => {
   const app = await createApp(config(0), {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(),
+    ),
     readinessEvaluator: evaluator(() => notReadyDecision()),
   });
   try {
@@ -270,6 +371,9 @@ test("the comment that starts a run cannot answer a question created later", asy
 test("a transient readiness error is recorded and retried", async () => {
   let attempts = 0;
   const app = await createApp(config(0), {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(),
+    ),
     readinessEvaluator: evaluator(() => {
       attempts += 1;
       if (attempts === 1) throw new Error("temporary model failure");
@@ -300,6 +404,9 @@ test("a transient readiness error is recorded and retried", async () => {
 
 test("an exhausted readiness retry fails with both attempts recorded", async () => {
   const app = await createApp(config(0), {
+    stepImplementations: fakeStepImplementations(
+      new FakeImplementationService(),
+    ),
     readinessEvaluator: evaluator(() => {
       throw new Error("model unavailable");
     }),
@@ -317,6 +424,38 @@ test("an exhausted readiness retry fails with both attempts recorded", async () 
       ["error", "error"],
     );
     assert.equal(app.eventStore.getRun(first.runId!)?.lastError, "model unavailable");
+  } finally {
+    await app.close();
+  }
+});
+
+test("a terminal implementation failure is posted through the durable outbox", async () => {
+  const publisher = new FakeGitHubCommentPublisher();
+  const app = await createApp(config(0), {
+    readinessEvaluator: readyEvaluator(),
+    stepImplementations: fakeStepImplementations(
+      new FailingImplementationService(),
+    ),
+    githubCommentPublisher: publisher,
+  });
+  try {
+    const result = app.eventStore.ingest(
+      event("implementation-failure", "issues", payload(31)),
+      "loop-bot",
+    );
+    app.coordinator.wake();
+    await waitFor(
+      () =>
+        app.eventStore.listGitHubCommentOutbox(result.runId!)[0]?.status ===
+        "sent",
+    );
+    const run = app.eventStore.getRun(result.runId!);
+    const comment = app.eventStore.listGitHubCommentOutbox(result.runId!)[0]!;
+    assert.equal(run?.status, "failed");
+    assert.equal(run?.lastError, "permission denied by automatic review");
+    assert.match(comment.body, /Implementation stopped/);
+    assert.match(comment.body, /permission denied by automatic review/);
+    assert.match(comment.marker, /implementation:failed/);
   } finally {
     await app.close();
   }
@@ -366,7 +505,7 @@ function notReadyDecision(): ReadinessDecision {
   };
 }
 
-function readyEvaluator(): ReadinessEvaluator {
+function readyEvaluator(): ReadinessEvaluator<ReadinessDecision> {
   return evaluator(() => readyDecision());
 }
 
@@ -374,7 +513,7 @@ function evaluator(
   evaluateDecision: (
     input: ReadinessInput,
   ) => ReadinessDecision | Promise<ReadinessDecision>,
-): ReadinessEvaluator {
+): ReadinessEvaluator<ReadinessDecision> {
   return {
     modelId: "test-readiness",
     promptVersion: "readiness-test-v1",
@@ -432,4 +571,90 @@ class FakeGitHubCommentPublisher implements GitHubCommentPublisher {
     this.comments.push(comment);
     return comment;
   }
+}
+
+class FakeImplementationService {
+  constructor(private readonly delayMs = 0) {}
+
+  async prepare(): Promise<PreparedWorktree> {
+    return {
+      attemptId: 1,
+      worktreePath: "/tmp/worktree",
+      branch: "codex/test",
+      baseSha: "base",
+      goal: "Implement the test issue",
+    };
+  }
+
+  async implement(
+    input: PrepareWorktreeOutput,
+  ): Promise<CodexImplementationOutput> {
+    if (this.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    }
+    return {
+      ...input,
+      codexThreadId: "thread-test",
+      finalResponse: "Implemented",
+    };
+  }
+
+  async check(
+    input: CodexImplementationOutput,
+  ): Promise<DeterministicChecksOutput> {
+    return { ...input, checkResults: [] };
+  }
+
+  async snapshot(
+    input: DeterministicChecksOutput,
+  ): Promise<SnapshotOutput> {
+    return { ...input, commitSha: "commit" };
+  }
+
+  async review(input: SnapshotOutput): Promise<ReviewerOutput> {
+    return {
+      ...input,
+      review: {
+        mode: "stub",
+        decision: "approved",
+        summary: "Stub approval",
+      },
+    };
+  }
+
+  async publish(input: ReviewerOutput) {
+    return { ...input, pullRequestUrl: "https://github.test/pull/1" };
+  }
+}
+
+class FailingImplementationService extends FakeImplementationService {
+  override async implement(): Promise<CodexImplementationOutput> {
+    throw new Error("permission denied by automatic review");
+  }
+}
+
+function fakeStepImplementations(service: FakeImplementationService) {
+  return {
+    prepareWorktree: {
+      execute: () => service.prepare(),
+    },
+    codexImplementation: {
+      execute: (input: PrepareWorktreeOutput) => service.implement(input),
+    },
+    deterministicChecks: {
+      execute: (input: CodexImplementationOutput) => service.check(input),
+    },
+    snapshot: {
+      execute: (input: DeterministicChecksOutput) => service.snapshot(input),
+    },
+    reviewer: {
+      execute: (input: SnapshotOutput) => service.review(input),
+    },
+    publishPullRequest: {
+      execute: async (input: ReviewerOutput) => ({
+        ...(await service.publish(input)),
+        queuedEventsSeen: 0,
+      }),
+    },
+  };
 }

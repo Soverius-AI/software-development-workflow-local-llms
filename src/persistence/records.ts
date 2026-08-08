@@ -1,23 +1,19 @@
+import type {
+  ImplementationCheckDefinition,
+  ImplementationCheckResult,
+} from "../services/checks/contracts";
+import type {
+  ReadinessEvaluation,
+  ReadinessInput,
+} from "../services/readiness/contracts";
+import type { ReadinessDecision } from "../workflows/implementation/steps/readiness/readiness.definition";
+
 export type RunStatus =
   | "queued"
   | "running"
   | "waiting_human"
   | "completed"
   | "failed";
-
-export interface NormalizedGitHubEvent {
-  deliveryId: string;
-  eventName: string;
-  action: string | null;
-  repository: string;
-  correlationKey: string;
-  issueNumber: number | null;
-  senderLogin: string | null;
-  isHumanComment: boolean;
-  commentBody: string | null;
-  requiresHuman: boolean;
-  payload: unknown;
-}
 
 export interface WorkflowRunRecord {
   id: string;
@@ -52,33 +48,7 @@ export interface GitHubCommentOutboxRecord {
   sentAt: string | null;
 }
 
-export interface ReadinessInput {
-  controlRunId: string;
-  correlationKey: string;
-  repository: string;
-  issueNumber: number | null;
-  title: string;
-  body: string;
-  labels: string[];
-  clarifications: string[];
-}
-
-export interface ReadinessDecision {
-  ready: boolean;
-  summary: string;
-  acceptanceCriteria: string[];
-  missingInformation: string[];
-  question: string | null;
-}
-
-export interface ReadinessEvaluationResult {
-  decision: ReadinessDecision;
-  modelId: string;
-  promptVersion: string;
-  traceId: string | null;
-  finishReason: string | null;
-  usage: unknown;
-}
+export type ReadinessEvaluationResult = ReadinessEvaluation<ReadinessDecision>;
 
 export interface ReadinessEvaluationRecord {
   id: number;
@@ -90,6 +60,41 @@ export interface ReadinessEvaluationRecord {
   modelId: string;
   promptVersion: string;
   graphVersion: string;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export type ImplementationStage =
+  | "preparing"
+  | "implementing"
+  | "checking"
+  | "snapshotting"
+  | "reviewing"
+  | "publishing"
+  | "completed";
+
+export interface ImplementationAttemptRecord {
+  id: number;
+  runId: string;
+  attempt: number;
+  status: "running" | "success" | "error";
+  stage: ImplementationStage;
+  repositoryPath: string;
+  worktreePath: string;
+  branch: string;
+  baseSha: string | null;
+  codexThreadId: string | null;
+  goal: string;
+  modelBaseUrl: string;
+  modelId: string;
+  promptVersion: string;
+  checks: ImplementationCheckDefinition[];
+  checkResults: ImplementationCheckResult[] | null;
+  finalResponse: string | null;
+  review: unknown;
+  commitSha: string | null;
+  pullRequestUrl: string | null;
   error: string | null;
   createdAt: string;
   completedAt: string | null;

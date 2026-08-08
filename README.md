@@ -4,13 +4,25 @@ The intended system is a complete development graph: issue readiness and
 decomposition, Codex goal-based implementation, deterministic checks, parallel
 specialist reviewers, manager consolidation and human escalation, recording,
 and separate scheduled graphs for self-improvement, refactoring discovery, and
-new-feature suggestions. The durable GitHub → Mastra loop below is the first
-implemented slice, not the complete workflow.
+new-feature suggestions. The durable GitHub → Mastra → Codex implementation
+path below is an implemented slice, not the complete workflow.
 
 Future agent sessions should begin with `AGENTS.md`. The full design, reviewer
 contract, conflict handling, visual-design evidence, recorder, and learning
 boundary are documented in `docs/architecture.md`. Machine-readable node status
-and the required reviewer set live in `src/graph-definition.ts`.
+and the required reviewer set live in `src/workflows/definitions.ts`.
+
+The source tree follows the graph boundary. The implementation workflow is
+composed in `src/workflows/implementation/workflow.ts`. Every meaningful operation
+has a vertical slice under `steps/<step-name>/`: `<step-name>.definition.ts`
+contains its schemas, inferred transition types, and Mastra configuration, while
+`<step-name>.implementation.ts` contains its workflow behavior. Larger implementations can
+be split into additional step-local modules without separating the definition
+from the behavior it invokes.
+Codex, Git, GitHub, checks, persistence, and process execution live in their
+corresponding `src/services/`, `src/persistence/`, and `src/shared/` modules.
+Planned workflows receive their own sibling directory when their first
+executable step is implemented.
 
 ## How we arrived at this architecture
 
@@ -97,7 +109,7 @@ GitHub events are recorded in SQLite first and acknowledged quickly. A
 coordinator gives Mastra at most one implementation slot by default. An event
 that arrives while Mastra is working never interrupts the current model turn.
 
-Before the simulated implementation step, a real readiness agent calls the
+Before implementation, a real readiness agent calls the
 OpenAI-compatible model configured in `.env`. It evaluates the issue title,
 body, labels, and human clarifications against a structured schema. Every
 attempt appends its input, decision, model ID, prompt version, graph version, timing, usage,
@@ -109,6 +121,21 @@ For the same issue, the coordinator attaches the event to the existing run's
 inbox. For a different issue it creates another run, which waits for the local
 implementation slot. GitHub delivery IDs make retries harmless, and messages
 produced by the configured bot are ignored to prevent feedback loops.
+
+For a ready issue, Mastra creates an isolated worktree and starts Codex through
+the SDK. Codex is explicitly pointed at the configured OpenAI-compatible model
+URL and runs with workspace write access, on-request approvals, and automatic
+approval review. Its first action must create a native persistent goal; Mastra
+accepts the implementation only when the recorded Codex session proves that the
+goal was created and completed. Mastra, rather than Codex, owns the branch,
+commit, push, and pull request.
+
+Repository setup and deterministic commands are declared in
+`.implementer.json`. Mastra records that file before Codex starts and rejects
+the result if Codex changes it. A failing setup, Codex turn, native goal, check,
+commit, push, or pull-request operation stops the run and queues a durable
+failure comment on the issue. Interrupted runs are also failed on restart and
+their retained worktrees are not retried automatically.
 
 ```mermaid
 flowchart LR
@@ -134,7 +161,8 @@ cp .env.example .env
 pnpm start
 ```
 
-The readiness agent expects an OpenAI-compatible model server. These values are
+The readiness and Codex implementation agents expect an OpenAI-compatible model
+server. These values are
 deployment configuration and belong in the ignored `.env` file:
 
 ```dotenv
@@ -142,13 +170,17 @@ MODEL_BASE_URL=http://127.0.0.1:8888/v1
 MODEL_API_KEY=local
 READINESS_MODEL=unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL
 READINESS_TIMEOUT_MS=120000
+IMPLEMENTER_MODEL_BASE_URL=http://127.0.0.1:8888/v1
+IMPLEMENTER_MODEL_API_KEY=local
+IMPLEMENTER_MODEL=unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL
 ```
 
 `READINESS_TIMEOUT_MS` prevents a stalled local generation from occupying the
 workflow indefinitely. No small output-token limit is imposed.
 
 The service listens only on `127.0.0.1:4317`. `GET /health` shows whether an
-implementation occupies the slot, and `GET /runs` shows the durable run state.
+implementation occupies the slot, `GET /runs` shows the durable run state, and
+`GET /implementation-attempts` exposes implementation stages and evidence.
 The event database and Mastra workflow snapshots and observability traces live
 separately under `.data/`. Structured runtime logs are also written to the
 terminal.
@@ -157,7 +189,8 @@ terminal.
 
 The receiver can use a GitHub App to post a readiness question directly on the
 issue that owns the suspended run. Create an app with repository permissions
-**Metadata: read** and **Issues: read and write**, install it on the target
+**Metadata: read**, **Issues: read and write**, **Contents: read and write**, and
+**Pull requests: read and write**, install it on the target
 repository, download its private key, and place that PEM file in the ignored
 `.secrets/` directory. Then configure the ignored `.env` file:
 
@@ -194,9 +227,27 @@ pnpm studio
 ```
 
 Open `http://localhost:4111`, select **Workflows**, then select the
-`github-implementation` workflow. Select a run in its **Runs** list to see step
+`github-implementation` workflow. The reduced `github-demo-implementation`
+workflow is registered alongside it. Select a run in its **Runs** list to see step
 status, inputs, outputs, suspension state, timing, and traces persisted in
 `.data/mastra.sqlite`.
+
+### Run the reduced demo implementer
+
+For a short demonstration, select the additive demo workflow in the ignored
+`.env` file:
+
+```dotenv
+IMPLEMENTER_WORKFLOW=demo
+```
+
+Restart `pnpm start` after changing the setting. `GET /health` reports the
+active `workflowMode`. The demo still performs readiness and creates an
+isolated worktree, but its Codex worker has native goals disabled. Mastra then
+commits, pushes, and creates the pull request without running the configured
+deterministic checks or the reviewer step. The generated pull-request body
+marks that reduced assurance explicitly. Remove the setting or use
+`IMPLEMENTER_WORKFLOW=production` to restore the default production path.
 
 The included [GitHub Actions workflow](.github/workflows/implementer.yml) uses a
 self-hosted runner labelled `implementer`. That runner opens an outbound
@@ -249,17 +300,27 @@ boundary, and durable GitHub comment. A subsequent human issue comment resumes
 the exact readiness step and triggers a new recorded evaluation. Other issues
 may proceed while this one waits.
 
-## Where Codex fits today
+## Current implementation boundary
 
-The readiness portion of `readiness-and-decomposition` is implemented; deciding
-whether to propose child issues remains planned. The implementation step still
-deliberately waits for `SIMULATED_IMPLEMENTATION_MS`; this makes concurrency
-deterministic in the demo and tests. It still needs to be replaced by the real
-Codex goal worker. The reviewers, manager, general recorder, pull-request
-integration, and all three scheduled graphs—self-improvement, refactoring
-discovery, and new-feature suggestion—remain planned. Refactoring and feature
-discovery only create human-reviewed proposals; approved proposals re-enter the
-ordinary production graph as issues.
+The readiness portion of `readiness-and-decomposition`, the Codex native-goal
+worker, Mastra-owned worktrees, externally configured checks, implementation
+evidence, local snapshot commit, and GitHub push/pull-request path are
+implemented. Pull-request creation requires a configured GitHub App and remains
+unverified as a hosted end-to-end operation.
+
+The reduced demo workflow is implemented and locally tested through worktree,
+commit, and pull-request handoff with a fake publisher. Its real Codex/model and
+hosted GitHub side effects have not been exercised end to end here. It is a
+presentation path, not an alternative source of verification evidence.
+
+The reviewer step currently records an explicit always-approved stub so that the
+success route can be exercised. It is not independent review and must not be
+treated as evidence of quality. Decomposition, the parallel specialist
+reviewers, manager and repair loop, general recorder, human PR approval, and all
+three scheduled graphs—self-improvement, refactoring discovery, and new-feature
+suggestion—remain planned. Refactoring and feature discovery only create
+human-reviewed proposals; approved proposals re-enter the ordinary production
+graph as issues.
 
 ## Verify
 
@@ -272,5 +333,7 @@ pnpm test:readiness:live
 The integration tests cover the critical race: a second delivery arrives while
 the first Mastra run is active, attaches to that run, and does not create a
 second implementation. They also exercise readiness success, recorded retry,
-and real Mastra suspension and resumption from a GitHub comment. The live check
-is intentionally separate because it requires the configured local model.
+and real Mastra suspension and resumption from a GitHub comment. They also cover
+the implementation success route with a test worker and durable terminal failure
+delivery. The live check is intentionally separate because it requires the
+configured local model.

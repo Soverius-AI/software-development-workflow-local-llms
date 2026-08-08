@@ -1,54 +1,22 @@
 import { Agent } from "@mastra/core/agent";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { z } from "zod";
-import type { ReadinessEvaluationResult, ReadinessInput } from "./types";
+import type { ReadinessEvaluator, ReadinessInput } from "./contracts";
 
 export const READINESS_PROMPT_VERSION = "readiness-v1";
 
-export const readinessDecisionSchema = z
-  .object({
-    ready: z.boolean(),
-    summary: z.string().min(1),
-    acceptanceCriteria: z.array(z.string().min(1)),
-    missingInformation: z.array(z.string().min(1)),
-    question: z.string().min(1).nullable(),
-  })
-  .superRefine((decision, context) => {
-    if (decision.ready && decision.missingInformation.length > 0) {
-      context.addIssue({
-        code: "custom",
-        message: "A ready issue cannot have missing information.",
-      });
-    }
-    if (decision.ready && decision.question !== null) {
-      context.addIssue({
-        code: "custom",
-        message: "A ready issue cannot ask a clarification question.",
-      });
-    }
-    if (!decision.ready && decision.question === null) {
-      context.addIssue({
-        code: "custom",
-        message: "An unready issue must ask a clarification question.",
-      });
-    }
-  });
-
-export interface ReadinessEvaluator {
-  readonly modelId: string;
-  readonly promptVersion: string;
-  evaluate(
-    input: ReadinessInput,
-    options: { abortSignal: AbortSignal },
-  ): Promise<ReadinessEvaluationResult>;
-}
-
-export function createReadinessEvaluator(config: {
-  baseUrl: string;
-  apiKey: string;
-  modelId: string;
-  timeoutMs: number;
-}): { evaluator: ReadinessEvaluator; agent: Agent } {
+export function createReadinessEvaluator<TDecision>(
+  config: {
+    baseUrl: string;
+    apiKey: string;
+    modelId: string;
+    timeoutMs: number;
+  },
+  decisionSchema: z.ZodType<TDecision>,
+): {
+  evaluator: ReadinessEvaluator<TDecision>;
+  agent: Agent;
+} {
   const provider = createOpenAICompatible({
     name: "local-llama",
     baseURL: config.baseUrl,
@@ -79,12 +47,12 @@ export function createReadinessEvaluator(config: {
         const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
         const result = await agent.generate(buildReadinessPrompt(input), {
           structuredOutput: {
-            schema: readinessDecisionSchema,
+            schema: decisionSchema,
             jsonPromptInjection: "auto",
           },
           abortSignal: AbortSignal.any([options.abortSignal, timeoutSignal]),
         });
-        const decision = readinessDecisionSchema.parse(result.object);
+        const decision = decisionSchema.parse(result.object);
         return {
           decision,
           modelId: config.modelId,

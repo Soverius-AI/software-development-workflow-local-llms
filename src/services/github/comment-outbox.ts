@@ -1,5 +1,5 @@
-import type { GitHubCommentPublisher } from "./github-comments";
-import type { EventStore } from "./store";
+import type { EventStore } from "../../persistence/event-store";
+import type { GitHubCommentPublisher } from "./client";
 
 export class GitHubCommentOutboxWorker {
   private active = false;

@@ -19,6 +19,48 @@ test("readiness model deployment settings come from the environment", () => {
     modelId: "test/model",
     timeoutMs: 45_000,
   });
+  assert.deepEqual(config.implementation.model, {
+    baseUrl: "http://localhost:9999/v1",
+    apiKey: "test-key",
+    modelId: "test/model",
+  });
+});
+
+test("the implementation model and worktree settings can be overridden", () => {
+  const config = loadConfig(
+    {
+      GITHUB_REPOSITORY: "example/app",
+      IMPLEMENTER_MODEL_BASE_URL: "http://localhost:8888/v1",
+      IMPLEMENTER_MODEL_API_KEY: "implementation-key",
+      IMPLEMENTER_MODEL: "implementation/model",
+      IMPLEMENTER_REPOSITORY_PATH: "source",
+      IMPLEMENTER_WORKTREE_ROOT: "worktrees",
+      IMPLEMENTER_BASE_BRANCH: "develop",
+    },
+    "/tmp/project",
+  );
+
+  assert.equal(config.implementation.repository, "example/app");
+  assert.equal(config.implementation.repositoryPath, "/tmp/project/source");
+  assert.equal(config.implementation.worktreeRoot, "/tmp/project/worktrees");
+  assert.equal(config.implementation.baseBranch, "develop");
+  assert.deepEqual(config.implementation.model, {
+    baseUrl: "http://localhost:8888/v1",
+    apiKey: "implementation-key",
+    modelId: "implementation/model",
+  });
+});
+
+test("the demo workflow must be selected explicitly", () => {
+  assert.equal(loadConfig({}, "/tmp/project").workflowMode, "production");
+  assert.equal(
+    loadConfig({ IMPLEMENTER_WORKFLOW: "demo" }, "/tmp/project").workflowMode,
+    "demo",
+  );
+  assert.throws(
+    () => loadConfig({ IMPLEMENTER_WORKFLOW: "unsafe" }, "/tmp/project"),
+    /must be either production or demo/,
+  );
 });
 
 test("GitHub App credentials are resolved from the environment", () => {
@@ -37,6 +79,7 @@ test("GitHub App credentials are resolved from the environment", () => {
     installationId: "456",
     privateKeyPath: "/tmp/project/.secrets/app.pem",
     apiBaseUrl: "https://github.example/api/v3",
+    gitBaseUrl: "https://github.com",
     timeoutMs: 9_000,
   });
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readinessDecisionSchema } from "../src/readiness";
+import { readinessDecisionSchema } from "../src/workflows/implementation/steps/readiness/readiness.definition";
 
 test("a ready decision cannot retain missing information", () => {
   const result = readinessDecisionSchema.safeParse({

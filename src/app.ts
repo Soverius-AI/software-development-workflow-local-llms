@@ -1,42 +1,75 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import { normalizeGitHubEvent, verifyGitHubSignature } from "./github";
-import { GitHubCommentOutboxWorker } from "./github-comment-outbox";
+import { normalizeGitHubEvent, verifyGitHubSignature } from "./services/github/webhook";
+import { GitHubCommentOutboxWorker } from "./services/github/comment-outbox";
 import {
   GitHubAppCommentPublisher,
   type GitHubCommentPublisher,
-} from "./github-comments";
+  type GitHubPullRequestPublisher,
+} from "./services/github/client";
 import type { AppConfig } from "./config";
-import { RunCoordinator } from "./coordinator";
+import { RunCoordinator } from "./orchestration/run-coordinator";
+import { createReadinessEvaluator } from "./services/readiness/evaluator";
+import type { ReadinessEvaluator } from "./services/readiness/contracts";
+import { EventStore } from "./persistence/event-store";
+import { createImplementationMastra } from "./workflows/implementation";
 import {
-  createReadinessEvaluator,
-  type ReadinessEvaluator,
-} from "./readiness";
-import { EventStore } from "./store";
-import { createImplementationMastra } from "./workflow";
+  createImplementationWorkflowImplementations,
+  type ImplementationWorkflowImplementations,
+} from "./workflows/implementation/create-step-implementations";
+import {
+  readinessDecisionSchema,
+  type ReadinessDecision,
+} from "./workflows/implementation/steps/readiness/readiness.definition";
+import {
+  createDemoImplementationWorkflowImplementations,
+  type DemoImplementationWorkflowImplementations,
+} from "./workflows/demo-implementation/create-step-implementations";
 
 export async function createApp(
   config: AppConfig,
   options: {
-    readinessEvaluator?: ReadinessEvaluator;
+    readinessEvaluator?: ReadinessEvaluator<ReadinessDecision>;
     githubCommentPublisher?: GitHubCommentPublisher;
+    githubPullRequestPublisher?: GitHubPullRequestPublisher;
+    stepImplementations?: Partial<ImplementationWorkflowImplementations>;
+    demoStepImplementations?: Partial<DemoImplementationWorkflowImplementations>;
   } = {},
 ) {
   const eventStore = new EventStore(config.databasePath);
   const readiness = options.readinessEvaluator
     ? { evaluator: options.readinessEvaluator, agent: undefined }
-    : createReadinessEvaluator(config.readinessModel);
-  const { mastra, workflow, storage } = createImplementationMastra({
+    : createReadinessEvaluator(config.readinessModel, readinessDecisionSchema);
+  const githubAppClient = config.githubApp
+    ? new GitHubAppCommentPublisher(config.githubApp)
+    : undefined;
+  const githubCommentPublisher = options.githubCommentPublisher ?? githubAppClient;
+  const githubPullRequestPublisher =
+    options.githubPullRequestPublisher ?? githubAppClient ?? null;
+  const implementations = {
+    ...createImplementationWorkflowImplementations({
+      config: config.implementation,
+      store: eventStore,
+      readinessEvaluator: readiness.evaluator,
+      publisher: githubPullRequestPublisher,
+    }),
+    ...options.stepImplementations,
+  };
+  const demoImplementations = {
+    ...createDemoImplementationWorkflowImplementations({
+      config: config.implementation,
+      store: eventStore,
+      readinessEvaluator: readiness.evaluator,
+      publisher: githubPullRequestPublisher,
+    }),
+    ...options.demoStepImplementations,
+  };
+  const { mastra, workflow, demoWorkflow, storage } = createImplementationMastra({
     databaseUrl: config.mastraDatabaseUrl,
-    eventStore,
-    readinessEvaluator: readiness.evaluator,
+    implementations,
+    demoImplementations,
     ...(readiness.agent ? { readinessAgent: readiness.agent } : {}),
   });
   await storage.init();
-  const githubCommentPublisher =
-    options.githubCommentPublisher ??
-    (config.githubApp
-      ? new GitHubAppCommentPublisher(config.githubApp)
-      : undefined);
   const githubCommentOutbox = githubCommentPublisher
     ? new GitHubCommentOutboxWorker(
         eventStore,
@@ -47,9 +80,8 @@ export async function createApp(
     : null;
   const coordinator = new RunCoordinator(
     eventStore,
-    workflow,
+    config.workflowMode === "demo" ? demoWorkflow : workflow,
     config.maxActiveImplementations,
-    config.simulatedImplementationMs,
     () => githubCommentOutbox?.wake(),
   );
 
@@ -98,6 +130,7 @@ async function route(
       ok: true,
       activeImplementations: coordinator.activeCount,
       githubCommentDelivery: config.githubApp ? "enabled" : "disabled",
+      workflowMode: config.workflowMode,
       pendingGitHubComments: commentOutbox.filter(({ status }) =>
         ["pending", "sending", "retry"].includes(status),
       ).length,
@@ -115,6 +148,13 @@ async function route(
 
   if (request.method === "GET" && request.url === "/github-comments") {
     sendJson(response, 200, { comments: store.listGitHubCommentOutbox() });
+    return;
+  }
+
+  if (request.method === "GET" && request.url === "/implementation-attempts") {
+    sendJson(response, 200, {
+      attempts: store.listImplementationAttempts(),
+    });
     return;
   }
 
