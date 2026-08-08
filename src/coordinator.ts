@@ -13,6 +13,7 @@ export class RunCoordinator {
     private readonly workflow: Workflow<any, any, any, any, any, any, any, any>,
     private readonly maxActive: number,
     private readonly implementationMs: number,
+    private readonly onGitHubCommentQueued: () => void = () => {},
   ) {}
 
   wake(): void {
@@ -65,8 +66,11 @@ export class RunCoordinator {
           return;
         }
         const run = await this.workflow.createRun({ runId: record.mastraRunId });
+        if (!record.pendingStep) {
+          throw new Error(`Run ${record.id} has no suspended step to resume.`);
+        }
         const result = await run.resume({
-          step: "implementation",
+          step: record.pendingStep,
           resumeData: { answer },
         });
         this.finish(record.id, result);
@@ -75,26 +79,15 @@ export class RunCoordinator {
 
       const run = await this.workflow.createRun();
       this.store.setMastraRunId(record.id, run.runId);
-      const { requiresHuman } = this.store.getRunOptions(record.id);
-      let result = await run.start({
+      const result = await run.start({
         inputData: {
           controlRunId: record.id,
           correlationKey: record.correlationKey,
-          requiresHuman,
           implementationMs: this.implementationMs,
           queuedEventsSeen: 0,
         },
       });
 
-      if (result.status === "suspended") {
-        const answer = this.store.consumeHumanComment(record.id);
-        if (answer) {
-          result = await run.resume({
-            step: "implementation",
-            resumeData: { answer },
-          });
-        }
-      }
       this.finish(record.id, result);
     } catch (error) {
       this.store.setStatus(record.id, "failed", {
@@ -103,21 +96,78 @@ export class RunCoordinator {
     }
   }
 
-  private finish(recordId: string, result: { status: string; [key: string]: any }): void {
+  private finish(
+    recordId: string,
+    result: {
+      status: string;
+      steps?: Record<string, { status?: string; suspendPayload?: any }>;
+      suspendPayload?: any;
+      [key: string]: any;
+    },
+  ): void {
     if (result.status === "success") {
       this.store.markAllEventsConsumed(recordId);
       this.store.setStatus(recordId, "completed");
       return;
     }
     if (result.status === "suspended") {
-      this.store.setStatus(recordId, "waiting_human", {
-        question:
-          result.suspendPayload?.question ?? "A human decision is required.",
+      const suspension = findSuspension(result);
+      const question =
+        suspension?.payload?.question ?? "A human decision is required.";
+      const evaluationId = suspension?.payload?.evaluationId ?? "unknown";
+      const marker = `<!-- mastra-loop:${recordId}:readiness:${evaluationId} -->`;
+      const missingInformation = Array.isArray(
+        suspension?.payload?.missingInformation,
+      )
+        ? (suspension.payload.missingInformation as unknown[]).filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [];
+      const body = formatReadinessQuestion(
+        question,
+        missingInformation,
+        marker,
+      );
+      const queued = this.store.suspendRunAndEnqueueQuestion(recordId, {
+        step: suspension?.stepId ?? null,
+        question,
+        marker,
+        body,
       });
+      if (queued) this.onGitHubCommentQueued();
       return;
     }
     this.store.setStatus(recordId, "failed", {
       error: result.error?.message ?? `Mastra ended with ${result.status}`,
     });
   }
+}
+
+function formatReadinessQuestion(
+  question: string,
+  missingInformation: string[],
+  marker: string,
+): string {
+  const missing =
+    missingInformation.length === 0
+      ? ""
+      : `\n\nMissing information:\n${missingInformation
+          .map((item) => `- ${item}`)
+          .join("\n")}`;
+  return `### Readiness needs clarification\n\n${question}${missing}\n\nReply to this issue with the missing details. The same implementation run will continue.\n\n${marker}`;
+}
+
+function findSuspension(result: {
+  steps?: Record<string, { status?: string; suspendPayload?: any }>;
+  suspendPayload?: any;
+}): { stepId: string; payload: any } | null {
+  for (const [stepId, step] of Object.entries(result.steps ?? {})) {
+    if (step.status === "suspended") {
+      return {
+        stepId,
+        payload: step.suspendPayload ?? result.suspendPayload,
+      };
+    }
+  }
+  return null;
 }

@@ -72,6 +72,28 @@ test("events created by the loop bot are ignored", () => {
   }
 });
 
+test("events containing the loop marker are ignored even if the bot login changes", () => {
+  const store = makeStore();
+  try {
+    const marked = normalizeGitHubEvent({
+      deliveryId: "delivery-marker",
+      eventName: "issue_comment",
+      payload: {
+        action: "created",
+        repository: { full_name: "example/app" },
+        issue: { number: 12, labels: [] },
+        comment: { body: "Question\n<!-- mastra-loop:run:readiness:1 -->" },
+        sender: { login: "renamed-app[bot]" },
+      },
+    });
+    const result = store.ingest(marked, "old-bot-name");
+    assert.equal(result.outcome, "ignored");
+    assert.equal(store.listRuns().length, 0);
+  } finally {
+    store.close();
+  }
+});
+
 test("signature verification uses the raw request body", () => {
   const body = Buffer.from('{"hello":"world"}');
   const secret = "test-secret";

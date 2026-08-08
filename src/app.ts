@@ -1,22 +1,56 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { normalizeGitHubEvent, verifyGitHubSignature } from "./github";
+import { GitHubCommentOutboxWorker } from "./github-comment-outbox";
+import {
+  GitHubAppCommentPublisher,
+  type GitHubCommentPublisher,
+} from "./github-comments";
 import type { AppConfig } from "./config";
 import { RunCoordinator } from "./coordinator";
+import {
+  createReadinessEvaluator,
+  type ReadinessEvaluator,
+} from "./readiness";
 import { EventStore } from "./store";
 import { createImplementationMastra } from "./workflow";
 
-export async function createApp(config: AppConfig) {
+export async function createApp(
+  config: AppConfig,
+  options: {
+    readinessEvaluator?: ReadinessEvaluator;
+    githubCommentPublisher?: GitHubCommentPublisher;
+  } = {},
+) {
   const eventStore = new EventStore(config.databasePath);
+  const readiness = options.readinessEvaluator
+    ? { evaluator: options.readinessEvaluator, agent: undefined }
+    : createReadinessEvaluator(config.readinessModel);
   const { mastra, workflow, storage } = createImplementationMastra({
     databaseUrl: config.mastraDatabaseUrl,
     eventStore,
+    readinessEvaluator: readiness.evaluator,
+    ...(readiness.agent ? { readinessAgent: readiness.agent } : {}),
   });
   await storage.init();
+  const githubCommentPublisher =
+    options.githubCommentPublisher ??
+    (config.githubApp
+      ? new GitHubAppCommentPublisher(config.githubApp)
+      : undefined);
+  const githubCommentOutbox = githubCommentPublisher
+    ? new GitHubCommentOutboxWorker(
+        eventStore,
+        githubCommentPublisher,
+        config.githubOutboxRetryBaseMs,
+        config.githubOutboxMaxAttempts,
+      )
+    : null;
   const coordinator = new RunCoordinator(
     eventStore,
     workflow,
     config.maxActiveImplementations,
     config.simulatedImplementationMs,
+    () => githubCommentOutbox?.wake(),
   );
 
   const server = http.createServer(async (request, response) => {
@@ -30,6 +64,7 @@ export async function createApp(config: AppConfig) {
   });
 
   coordinator.wake();
+  githubCommentOutbox?.wake();
 
   return {
     server,
@@ -42,6 +77,7 @@ export async function createApp(config: AppConfig) {
         );
       }
       await coordinator.close();
+      await githubCommentOutbox?.close();
       await mastra.observability.flush();
       await mastra.shutdown();
       eventStore.close();
@@ -57,12 +93,28 @@ async function route(
   coordinator: RunCoordinator,
 ): Promise<void> {
   if (request.method === "GET" && request.url === "/health") {
-    sendJson(response, 200, { ok: true, activeImplementations: coordinator.activeCount });
+    const commentOutbox = store.listGitHubCommentOutbox();
+    sendJson(response, 200, {
+      ok: true,
+      activeImplementations: coordinator.activeCount,
+      githubCommentDelivery: config.githubApp ? "enabled" : "disabled",
+      pendingGitHubComments: commentOutbox.filter(({ status }) =>
+        ["pending", "sending", "retry"].includes(status),
+      ).length,
+      failedGitHubComments: commentOutbox.filter(
+        ({ status }) => status === "failed",
+      ).length,
+    });
     return;
   }
 
   if (request.method === "GET" && request.url === "/runs") {
     sendJson(response, 200, { runs: store.listRuns() });
+    return;
+  }
+
+  if (request.method === "GET" && request.url === "/github-comments") {
+    sendJson(response, 200, { comments: store.listGitHubCommentOutbox() });
     return;
   }
 
