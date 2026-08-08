@@ -183,7 +183,7 @@ export class GitHubAppCommentPublisher
         ...process.env,
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: `http.${this.repositoryUrl(repository)}.extraheader`,
-        GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+        GIT_CONFIG_VALUE_0: githubGitAuthorization(token),
         GIT_TERMINAL_PROMPT: "0",
       },
     });
@@ -263,6 +263,11 @@ export class GitHubAppCommentPublisher
     signer.end();
     return `${unsigned}.${signer.sign(this.privateKey).toString("base64url")}`;
   }
+}
+
+export function githubGitAuthorization(token: string): string {
+  const credentials = Buffer.from(`x-access-token:${token}`).toString("base64");
+  return `Authorization: Basic ${credentials}`;
 }
 
 function encodeJson(value: unknown): string {

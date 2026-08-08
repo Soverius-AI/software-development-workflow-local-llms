@@ -227,9 +227,27 @@ pnpm studio
 ```
 
 Open `http://localhost:4111`, select **Workflows**, then select the
-`github-implementation` workflow. Select a run in its **Runs** list to see step
+`github-implementation` workflow. The reduced `github-demo-implementation`
+workflow is registered alongside it. Select a run in its **Runs** list to see step
 status, inputs, outputs, suspension state, timing, and traces persisted in
 `.data/mastra.sqlite`.
+
+### Run the reduced demo implementer
+
+For a short demonstration, select the additive demo workflow in the ignored
+`.env` file:
+
+```dotenv
+IMPLEMENTER_WORKFLOW=demo
+```
+
+Restart `pnpm start` after changing the setting. `GET /health` reports the
+active `workflowMode`. The demo still performs readiness and creates an
+isolated worktree, but its Codex worker has native goals disabled. Mastra then
+commits, pushes, and creates the pull request without running the configured
+deterministic checks or the reviewer step. The generated pull-request body
+marks that reduced assurance explicitly. Remove the setting or use
+`IMPLEMENTER_WORKFLOW=production` to restore the default production path.
 
 The included [GitHub Actions workflow](.github/workflows/implementer.yml) uses a
 self-hosted runner labelled `implementer`. That runner opens an outbound
@@ -289,6 +307,11 @@ worker, Mastra-owned worktrees, externally configured checks, implementation
 evidence, local snapshot commit, and GitHub push/pull-request path are
 implemented. Pull-request creation requires a configured GitHub App and remains
 unverified as a hosted end-to-end operation.
+
+The reduced demo workflow is implemented and locally tested through worktree,
+commit, and pull-request handoff with a fake publisher. Its real Codex/model and
+hosted GitHub side effects have not been exercised end to end here. It is a
+presentation path, not an alternative source of verification evidence.
 
 The reviewer step currently records an explicit always-approved stub so that the
 success route can be exercised. It is not independent review and must not be

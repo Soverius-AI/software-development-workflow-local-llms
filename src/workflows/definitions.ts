@@ -1,5 +1,6 @@
 /** Machine-readable contract for the graphs we are building. */
 export const PRODUCTION_GRAPH_VERSION = "production-v1";
+export const DEMO_GRAPH_VERSION = "demo-v1";
 
 export type NodeStatus = "implemented" | "partial" | "planned";
 
@@ -48,6 +49,13 @@ export const productionGraph: readonly GraphNodeDefinition[] = [
   { id: "human-conflict-decision", responsibility: "Choose between irreconcilable recommendations using their evidence and trade-offs.", kind: "human-gate", status: "planned" },
   { id: "pull-request", responsibility: "Publish an approved, verified change and its evidence exactly once.", kind: "side-effect", status: "partial" },
   { id: "recorder", responsibility: "Append reconstructable run evidence without modifying the active graph.", kind: "deterministic", status: "partial" },
+] as const;
+
+export const demoImplementationGraph: readonly GraphNodeDefinition[] = [
+  { id: "readiness", responsibility: "Verify that the issue is sufficiently specified before the demo writes code.", kind: "agent", status: "implemented" },
+  { id: "prepare-worktree", responsibility: "Create one isolated branch and worktree from the configured remote base.", kind: "deterministic", status: "implemented" },
+  { id: "demo-codex-implementation", responsibility: "Run one write-capable Codex turn without creating or validating a persistent goal.", kind: "agent", status: "implemented" },
+  { id: "demo-pull-request", responsibility: "Commit, push, and create an explicitly low-assurance pull request without deterministic checks or independent review.", kind: "side-effect", status: "implemented" },
 ] as const;
 
 export const selfImprovementGraph: readonly GraphNodeDefinition[] = [

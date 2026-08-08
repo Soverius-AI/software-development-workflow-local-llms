@@ -3,6 +3,7 @@ import { createWorkflow } from "@mastra/core/workflows";
 import { LibSQLStore } from "@mastra/libsql";
 import { PinoLogger } from "@mastra/loggers";
 import { MastraStorageExporter, Observability } from "@mastra/observability";
+import { createDemoImplementationWorkflow } from "../demo-implementation/workflow";
 import type { ImplementationWorkflowDependencies } from "./dependencies";
 import { createCodexImplementationStep } from "./steps/codex-implementation/codex-implementation.definition";
 import { createDeterministicChecksStep } from "./steps/deterministic-checks/deterministic-checks.definition";
@@ -48,6 +49,9 @@ export function createImplementationMastra(
       ),
     )
     .commit();
+  const demoWorkflow = createDemoImplementationWorkflow(
+    dependencies.demoImplementations,
+  );
 
   const storage = new LibSQLStore({
     id: "loop-storage",
@@ -58,7 +62,7 @@ export function createImplementationMastra(
     ...(dependencies.readinessAgent
       ? { agents: { readiness: dependencies.readinessAgent } }
       : {}),
-    workflows: { implementation: workflow },
+    workflows: { implementation: workflow, demoImplementation: demoWorkflow },
     logger: new PinoLogger({ name: "Implementer", level: "info" }),
     observability: new Observability({
       configs: {
@@ -71,5 +75,5 @@ export function createImplementationMastra(
     }),
   });
 
-  return { mastra, workflow, storage };
+  return { mastra, workflow, demoWorkflow, storage };
 }

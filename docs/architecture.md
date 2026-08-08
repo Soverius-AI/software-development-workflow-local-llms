@@ -50,6 +50,21 @@ The current code implements this control-plane slice, the readiness half of read
 
 The current review node is intentionally a control-flow stub that always approves and records the warning that no independent specialist review occurred. Therefore the specialist-reviewer node is only partial, and the manager, conflict handling, and repair loop remain planned. The implementation records are a partial recorder, not the complete cross-graph experience schema. `src/workflows/definitions.ts` records which nodes are implemented, partial, or planned so future sessions cannot mistake the design for completed behaviour.
 
+## Reduced demo implementer
+
+Presentations can select a separate `github-demo-implementation` workflow. This is an additive graph; it does not remove or relax any node in the production graph.
+
+```mermaid
+flowchart LR
+  R["Readiness"] --> W["Isolated worktree"]
+  W --> C["Codex without persistent goal"]
+  C --> P["Commit, push, and pull request"]
+```
+
+The demo reuses the durable readiness suspension/resumption path and worktree preparation. Its Codex SDK configuration disables native goals, and it does not inspect goal evidence afterward. Once Codex returns, Mastra commits the changed worktree, pushes the isolated branch, and creates an idempotent pull request. There are no externally managed deterministic checks, fixed-snapshot reviewers, manager, or repair loop in this path. The pull-request body states this lower-assurance boundary so that a demo artifact cannot be mistaken for production verification.
+
+Both workflows are registered with Mastra for inspection. The webhook coordinator uses the production graph by default and selects the demo graph only when `IMPLEMENTER_WORKFLOW=demo`. The active selection is visible from `GET /health`. Implementation attempts retain the model, prompt version (`codex-demo-no-goal-v1` for the demo), Codex event stream, commit, pull-request URL, and failure state. Configured check definitions may be loaded during worktree setup, but the demo never executes them and records no check results.
+
 ## Recorder and separate scheduled graphs
 
 Every production node will emit an append-only record containing its inputs, outputs, timestamps, tool calls, command results, changed files, deterministic results, reviewer findings, manager resolutions, human decisions, merge/revert/regression outcome, and exact model, prompt, skill, rubric, and graph versions. The recorder observes production; it never changes the graph that generated the evidence.

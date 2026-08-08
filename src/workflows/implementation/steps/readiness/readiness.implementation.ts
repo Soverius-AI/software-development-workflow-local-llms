@@ -7,6 +7,7 @@ export class ReadinessImplementation {
   constructor(
     private readonly store: EventStore,
     private readonly evaluator: ReadinessEvaluator<ReadinessDecision>,
+    private readonly graphVersion = PRODUCTION_GRAPH_VERSION,
   ) {}
 
   async execute(input: {
@@ -26,7 +27,7 @@ export class ReadinessImplementation {
       readinessInput,
       this.evaluator.modelId,
       this.evaluator.promptVersion,
-      PRODUCTION_GRAPH_VERSION,
+      this.graphVersion,
     );
     try {
       const evaluation = await this.evaluator.evaluate(readinessInput, {

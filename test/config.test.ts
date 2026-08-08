@@ -51,6 +51,18 @@ test("the implementation model and worktree settings can be overridden", () => {
   });
 });
 
+test("the demo workflow must be selected explicitly", () => {
+  assert.equal(loadConfig({}, "/tmp/project").workflowMode, "production");
+  assert.equal(
+    loadConfig({ IMPLEMENTER_WORKFLOW: "demo" }, "/tmp/project").workflowMode,
+    "demo",
+  );
+  assert.throws(
+    () => loadConfig({ IMPLEMENTER_WORKFLOW: "unsafe" }, "/tmp/project"),
+    /must be either production or demo/,
+  );
+});
+
 test("GitHub App credentials are resolved from the environment", () => {
   const config = loadConfig(
     {

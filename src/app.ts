@@ -20,6 +20,10 @@ import {
   readinessDecisionSchema,
   type ReadinessDecision,
 } from "./workflows/implementation/steps/readiness/readiness.definition";
+import {
+  createDemoImplementationWorkflowImplementations,
+  type DemoImplementationWorkflowImplementations,
+} from "./workflows/demo-implementation/create-step-implementations";
 
 export async function createApp(
   config: AppConfig,
@@ -28,6 +32,7 @@ export async function createApp(
     githubCommentPublisher?: GitHubCommentPublisher;
     githubPullRequestPublisher?: GitHubPullRequestPublisher;
     stepImplementations?: Partial<ImplementationWorkflowImplementations>;
+    demoStepImplementations?: Partial<DemoImplementationWorkflowImplementations>;
   } = {},
 ) {
   const eventStore = new EventStore(config.databasePath);
@@ -49,9 +54,19 @@ export async function createApp(
     }),
     ...options.stepImplementations,
   };
-  const { mastra, workflow, storage } = createImplementationMastra({
+  const demoImplementations = {
+    ...createDemoImplementationWorkflowImplementations({
+      config: config.implementation,
+      store: eventStore,
+      readinessEvaluator: readiness.evaluator,
+      publisher: githubPullRequestPublisher,
+    }),
+    ...options.demoStepImplementations,
+  };
+  const { mastra, workflow, demoWorkflow, storage } = createImplementationMastra({
     databaseUrl: config.mastraDatabaseUrl,
     implementations,
+    demoImplementations,
     ...(readiness.agent ? { readinessAgent: readiness.agent } : {}),
   });
   await storage.init();
@@ -65,7 +80,7 @@ export async function createApp(
     : null;
   const coordinator = new RunCoordinator(
     eventStore,
-    workflow,
+    config.workflowMode === "demo" ? demoWorkflow : workflow,
     config.maxActiveImplementations,
     () => githubCommentOutbox?.wake(),
   );
@@ -115,6 +130,7 @@ async function route(
       ok: true,
       activeImplementations: coordinator.activeCount,
       githubCommentDelivery: config.githubApp ? "enabled" : "disabled",
+      workflowMode: config.workflowMode,
       pendingGitHubComments: commentOutbox.filter(({ status }) =>
         ["pending", "sending", "retry"].includes(status),
       ).length,

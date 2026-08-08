@@ -1,6 +1,7 @@
 import path from "node:path";
 
 export interface AppConfig {
+  workflowMode: "production" | "demo";
   port: number;
   databasePath: string;
   mastraDatabaseUrl: string;
@@ -59,6 +60,7 @@ export function loadConfig(
     env.READINESS_MODEL ??
     "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL";
   return {
+    workflowMode: parseWorkflowMode(env.IMPLEMENTER_WORKFLOW),
     port: Number(env.PORT ?? 4317),
     databasePath,
     mastraDatabaseUrl,
@@ -108,6 +110,12 @@ export function loadConfig(
       timeoutMs: Math.max(1, Number(env.READINESS_TIMEOUT_MS ?? 120_000)),
     },
   };
+}
+
+function parseWorkflowMode(value: string | undefined): AppConfig["workflowMode"] {
+  if (!value || value === "production") return "production";
+  if (value === "demo") return "demo";
+  throw new Error("IMPLEMENTER_WORKFLOW must be either production or demo.");
 }
 
 function loadGitHubAppConfig(

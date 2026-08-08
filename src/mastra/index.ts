@@ -5,6 +5,7 @@ import { createImplementationMastra } from "../workflows/implementation";
 import { GitHubAppCommentPublisher } from "../services/github/client";
 import { createImplementationWorkflowImplementations } from "../workflows/implementation/create-step-implementations";
 import { readinessDecisionSchema } from "../workflows/implementation/steps/readiness/readiness.definition";
+import { createDemoImplementationWorkflowImplementations } from "../workflows/demo-implementation/create-step-implementations";
 
 try {
   process.loadEnvFile(".env");
@@ -28,9 +29,16 @@ const implementations = createImplementationWorkflowImplementations({
   readinessEvaluator: readiness.evaluator,
   publisher: githubAppClient,
 });
+const demoImplementations = createDemoImplementationWorkflowImplementations({
+  config: config.implementation,
+  store: eventStore,
+  readinessEvaluator: readiness.evaluator,
+  publisher: githubAppClient,
+});
 
 export const { mastra } = createImplementationMastra({
   databaseUrl: config.mastraDatabaseUrl,
   implementations,
+  demoImplementations,
   readinessAgent: readiness.agent,
 });

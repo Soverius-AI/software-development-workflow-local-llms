@@ -3,7 +3,19 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { GitHubAppCommentPublisher } from "../src/services/github/client";
+import {
+  GitHubAppCommentPublisher,
+  githubGitAuthorization,
+} from "../src/services/github/client";
+
+test("Git HTTPS uses GitHub App basic authentication", () => {
+  assert.equal(
+    githubGitAuthorization("installation-token"),
+    `Authorization: Basic ${Buffer.from(
+      "x-access-token:installation-token",
+    ).toString("base64")}`,
+  );
+});
 
 test("the GitHub App client exchanges a signed JWT and posts an issue comment", async () => {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });

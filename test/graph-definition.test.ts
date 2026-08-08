@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  demoImplementationGraph,
   featureSuggestionGraph,
   productionGraph,
   refactoringGraph,
@@ -54,4 +55,21 @@ test("production and scheduled loops remain separate graphs with explicit status
   );
   assert.ok(refactoringGraph.every(({ status }) => status === "planned"));
   assert.ok(featureSuggestionGraph.every(({ status }) => status === "planned"));
+});
+
+test("the reduced demo graph is explicit about its missing assurance gates", () => {
+  assert.deepEqual(
+    demoImplementationGraph.map(({ id }) => id),
+    [
+      "readiness",
+      "prepare-worktree",
+      "demo-codex-implementation",
+      "demo-pull-request",
+    ],
+  );
+  assert.ok(
+    demoImplementationGraph
+      .find(({ id }) => id === "demo-pull-request")
+      ?.responsibility.includes("without deterministic checks or independent review"),
+  );
 });

@@ -1,4 +1,5 @@
 export const IMPLEMENTATION_PROMPT_VERSION = "codex-goal-v1";
+export const DEMO_IMPLEMENTATION_PROMPT_VERSION = "codex-demo-no-goal-v1";
 
 export function formatGoal(input: {
   title: string;
@@ -37,4 +38,17 @@ Your first action must be to call the native create_goal command with the full o
 ${goal}
 
 Mastra owns the worktree, branch, commit, push, and pull request. Do not perform those Git operations. Do not edit ${checkConfigPath}; its commands are the independent deterministic verification boundary. You may run focused checks for self-correction, but Mastra will run the recorded checks separately after your goal completes. If an eligible permission request is necessary, use the normal approval mechanism; automatic review is configured.`;
+}
+
+export function formatDemoImplementationPrompt(
+  objective: string,
+  checkConfigPath: string,
+): string {
+  return `You are the single write-capable implementation worker in a deliberately reduced-assurance demo workflow.
+
+${objective}
+
+Implement the requested change completely in the assigned worktree. Do not create or update a native Codex goal. Preserve repository guidance and scope, inspect your work, and run focused checks when useful for self-correction.
+
+Mastra owns the worktree, branch, commit, push, and pull request. Do not perform those Git operations. Do not edit ${checkConfigPath}. This demo workflow will publish your result without externally managed deterministic checks or independent review, so state any verification you performed accurately in your final response.`;
 }

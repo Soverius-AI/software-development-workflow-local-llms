@@ -17,6 +17,7 @@ export class PrepareWorktreeImplementation {
     private readonly config: AppConfig["implementation"],
     private readonly store: EventStore,
     private readonly publisher: GitHubPullRequestPublisher | null,
+    private readonly promptVersion = IMPLEMENTATION_PROMPT_VERSION,
   ) {}
 
   async execute(input: {
@@ -53,7 +54,7 @@ export class PrepareWorktreeImplementation {
       goal,
       modelBaseUrl: this.config.model.baseUrl,
       modelId: this.config.model.modelId,
-      promptVersion: IMPLEMENTATION_PROMPT_VERSION,
+      promptVersion: this.promptVersion,
     });
 
     try {

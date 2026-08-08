@@ -23,10 +23,12 @@ import type {
 import type { ReviewerOutput } from "../src/workflows/implementation/steps/reviewer/reviewer.definition";
 import type { SnapshotOutput } from "../src/workflows/implementation/steps/snapshot/snapshot.definition";
 import type { ReadinessDecision } from "../src/workflows/implementation/steps/readiness/readiness.definition";
+import type { DemoCodexImplementationOutput } from "../src/workflows/demo-implementation/steps/codex-implementation/codex-implementation.definition";
 
 function config(implementationMs = 150): AppConfig {
   const id = randomUUID();
   return {
+    workflowMode: "production",
     port: 0,
     databasePath: path.join("/tmp", `loop-events-${id}.sqlite`),
     mastraDatabaseUrl: `file:${path.join("/tmp", `loop-mastra-${id}.sqlite`)}`,
@@ -100,6 +102,57 @@ test("an event arriving during a run is attached without starting a second run",
 
     await waitFor(() => app.eventStore.getRun(first.runId!)?.status === "completed");
     assert.equal(app.coordinator.activeCount, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("demo mode routes webhook runs through the reduced workflow", async () => {
+  const appConfig = config(0);
+  appConfig.workflowMode = "demo";
+  const service = new FakeImplementationService();
+  let demoPublished = false;
+  const app = await createApp(appConfig, {
+    readinessEvaluator: readyEvaluator(),
+    stepImplementations: {
+      ...fakeStepImplementations(service),
+      codexImplementation: {
+        execute: async () => {
+          throw new Error("the production Codex step must not run in demo mode");
+        },
+      },
+    },
+    demoStepImplementations: {
+      prepareWorktree: { execute: () => service.prepare() },
+      codexImplementation: {
+        execute: (input: PrepareWorktreeOutput) => service.implement(input),
+      },
+      publishPullRequest: {
+        execute: async (input: DemoCodexImplementationOutput) => {
+          demoPublished = true;
+          return {
+            ...input,
+            commitSha: "demo-commit",
+            pullRequestUrl: "https://github.test/pull/demo",
+          };
+        },
+      },
+    },
+  });
+  try {
+    const result = app.eventStore.ingest(
+      event("demo-route", "issues", payload(84)),
+      "loop-bot",
+    );
+    app.coordinator.wake();
+    await waitFor(
+      () => app.eventStore.getRun(result.runId!)?.status === "completed",
+    );
+    assert.equal(demoPublished, true);
+    assert.equal(
+      app.eventStore.listReadinessEvaluations(result.runId!)[0]?.graphVersion,
+      "demo-v1",
+    );
   } finally {
     await app.close();
   }
